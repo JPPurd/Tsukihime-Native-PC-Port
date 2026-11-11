@@ -843,6 +843,12 @@ internal sealed class GameApp : IDisposable
         // the texture cache cap follows the card's dedicated memory (a third of it, 512..1536 MiB; K11 section 8, package R1): the driver holds about twice the cap for it
         (long Bytes, string Name)? adapter = VideoMemory.Dedicated(_device.Info.ToString());
         long cacheCap = VideoMemory.CacheCapacity(adapter?.Bytes);
+        // a verification run can ask for a smaller card's cache (TSUKI_TEXTURE_CACHE_MIB): the hold for textures of issue #13 only shows with the 512 MiB cap
+        if (long.TryParse(Environment.GetEnvironmentVariable("TSUKI_TEXTURE_CACHE_MIB"), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long mib) && mib is >= 64 and <= 8192)
+        {
+            cacheCap = mib << 20;
+        }
+
         _log.WriteLine(adapter is { } a
             ? $"texture cache: {cacheCap >> 20} MiB (adapter \"{a.Name}\" has {a.Bytes >> 20} MiB dedicated)"
             : $"texture cache: {cacheCap >> 20} MiB (adapter memory unknown)");
@@ -1560,6 +1566,12 @@ internal sealed class GameApp : IDisposable
     // the frame of the last step names textures that are not resident yet: the loop shows the previous picture and does not step until they are (paced mode;
     // the verification runs that take screenshots, and --fast, wait for the textures instead so that every picture is complete)
     private bool _held;
+    private bool _holdGivenUp;              // the hold for this frame's textures was given up (TextureHold): no new hold until a frame is complete again
+    private int _overCapScript = -1;        // the script whose frame larger than the cache's cap was last logged
+    private long _overCapBytes;             // and that frame's size
+    private int _loggedMissing;             // the count of the last "textures of this frame are not resident" line (said again only when it changes)
+    private double _holdAgeMs;              // how long the loop has waited in this hold (TextureHold.Age: a stall of the loop does not count)
+    private long _holdLastPass;
     private long _holdStart;
     private long _lastHeldPresent;
     private long _holds;
@@ -1814,27 +1826,52 @@ internal sealed class GameApp : IDisposable
         long tf0 = Stopwatch.GetTimestamp();
         long requested0 = _feeder.Stats.Requested;
         int missing = _feeder.EnsureResident(list, _holdMode ? TimeSpan.Zero : TimeSpan.FromMilliseconds(_hidden ? 4000 : 300));
-        if (_holdMode && missing > 0)
+        if (missing == 0)
         {
+            _holdGivenUp = false;
+        }
+
+        if (_holdMode && missing > 0 && !_holdGivenUp)
+        {
+            long passNow = Stopwatch.GetTimestamp();
             if (!_held)
             {
                 _held = true;
-                _holdStart = Stopwatch.GetTimestamp();
+                _holdStart = passNow;
+                _holdLastPass = passNow;
+                _holdAgeMs = 0;
             }
 
-            // the previous picture stays on the screen (the frame target still holds it); poll for the tiles on the next pass of the loop, and present it again at most
-            // once per 60 Hz step (every pass re-presented it before, as fast as the driver allowed with vsync off; package R1)
-            long nowHeld = Stopwatch.GetTimestamp();
-            if (nowHeld - _lastHeldPresent >= Stopwatch.Frequency / 60)
+            // the hold has an end (issue #13): textures that cannot become resident froze the game on the picture before them
+            _holdAgeMs = TextureHold.Age(_holdAgeMs, Stopwatch.GetElapsedTime(_holdLastPass, passNow).TotalMilliseconds);
+            _holdLastPass = passNow;
+            double heldFor = _holdAgeMs;
+            if (!TextureHold.GiveUp(heldFor, _feeder.Pending))
             {
-                _lastHeldPresent = nowHeld;
-                (int hw, int hh) = _window.PixelSize;
-                _compositor.Present(hw, hh);
-                _window.Swap();
-                _presents++;
+                // the previous picture stays on the screen (the frame target still holds it); poll for the tiles on the next pass of the loop, and present it again at most
+                // once per 60 Hz step (every pass re-presented it before, as fast as the driver allowed with vsync off; package R1)
+                long nowHeld = Stopwatch.GetTimestamp();
+                if (nowHeld - _lastHeldPresent >= Stopwatch.Frequency / 60)
+                {
+                    _lastHeldPresent = nowHeld;
+                    (int hw, int hh) = _window.PixelSize;
+                    _compositor.Present(hw, hh);
+                    _window.Swap();
+                    _presents++;
+                }
+
+                return !_quit;
             }
 
-            return !_quit;
+            _holdGivenUp = true;
+            Say(TextureHold.GaveUpLine(heldFor, missing, _feeder.Pending, _runtime.Host.Script, _cache.Stats.ResidentBytes, _cache.CapacityBytes));
+        }
+
+        if (TextureHold.SayOverCap(_cache.PinnedBytes, _cache.CapacityBytes, _runtime.Host.Script, _overCapScript, _overCapBytes))
+        {
+            _overCapScript = _runtime.Host.Script;
+            _overCapBytes = _cache.PinnedBytes;
+            Say(TextureHold.OverCapLine(_cache.PinnedBytes, _cache.CapacityBytes, _runtime.Host.Script));
         }
 
         if (_held)
@@ -1918,10 +1955,19 @@ internal sealed class GameApp : IDisposable
         }
 
         _sweep?.AfterDraw(f, _runtime.Host, story, _runtime.Ui.Active ? _runtime.Ui.Mode.ToString() : "story", stats.MissingTextures);
+        if (stats.MissingTextures != _loggedMissing)
+        {
+            // said when the count changes, not for every frame: real play draws such frames now (a given-up hold, a tile of a damaged file), 60 a second (issue #13)
+            _loggedMissing = stats.MissingTextures;
+            if (stats.MissingTextures > 0)
+            {
+                TextureCacheStats cacheNow = _cache.Stats;
+                Say($"{stats.MissingTextures} textures of this frame are not resident (cache {cacheNow.Resident} textures, {cacheNow.ResidentBytes >> 20} MiB of {_cache.CapacityBytes >> 20}, {cacheNow.Evictions} evictions)");
+            }
+        }
+
         if (stats.MissingTextures > 0)
         {
-            TextureCacheStats cacheNow = _cache.Stats;
-            Say($"{stats.MissingTextures} textures of this frame are not resident (cache {cacheNow.Resident} textures, {cacheNow.ResidentBytes >> 20} MiB of {_cache.CapacityBytes >> 20}, {cacheNow.Evictions} evictions)");
             foreach (ref readonly DrawCmd c in list.Commands)
             {
                 if (c.Kind == DrawKind.TexturedQuad && c.Texture.Kind != TextureKind.Capture && !_cache.Contains(c.Texture) && _reportedMissing.Add(c.Texture))

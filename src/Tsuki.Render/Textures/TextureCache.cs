@@ -30,6 +30,7 @@ public sealed unsafe class TextureCache : ITextureSource, IDisposable
     private readonly LinkedList<Entry> _lru = new();                    // first = most recently used
     private readonly Dictionary<(int W, int H), Stack<uint>> _spare = [];
     private readonly Dictionary<TextureRef, TransitionParams> _transition = [];
+    private readonly HashSet<TextureRef> _pinned = [];                  // the textures the frame being prepared draws: never evicted (issue #13)
     private long _allocations;
     private long _recycles;
     private long _evictions;
@@ -93,6 +94,52 @@ public sealed unsafe class TextureCache : ITextureSource, IDisposable
 
         return true;
     }
+
+    /// <summary>Bytes of the resident textures that the frame being prepared draws (<see cref="Pin"/>).</summary>
+    public long PinnedBytes { get; private set; }
+
+    /// <summary>
+    /// Starts the set of textures a frame draws (issue #13). Until the next call none of the textures named with <see cref="Pin"/> is evicted, also when
+    /// together they are larger than <see cref="CapacityBytes"/>: a frame whose pictures did not fit the cap evicted its own first tiles with its last ones,
+    /// was never complete, and the game held the frame before it for ever (a scene of about twenty large layers with the 512 MiB cap of a small card).
+    /// </summary>
+    public void BeginFrame()
+    {
+        _pinned.Clear();
+        PinnedBytes = 0;
+    }
+
+    /// <summary>
+    /// Names <paramref name="key"/> as drawn by the frame being prepared: it is not evicted until the next <see cref="BeginFrame"/>, whether it is resident
+    /// already or uploaded later, and a resident one becomes the most recently used (as <see cref="Touch"/> does). True when it is resident.
+    /// </summary>
+    public bool Pin(in TextureRef key)
+    {
+        bool added = _pinned.Add(key);
+        if (!_map.TryGetValue(key, out LinkedListNode<Entry>? node))
+        {
+            return false;
+        }
+
+        if (added)
+        {
+            PinnedBytes += node.Value.Bytes;
+        }
+
+        if (!ReferenceEquals(_lru.First, node))
+        {
+            _lru.Remove(node);
+            _lru.AddFirst(node);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Evicts least recently used textures beyond the cap that the frame being prepared does not draw. The feeder calls it once a frame's textures are named:
+    /// what a larger frame before it left above the cap goes as soon as nothing draws it any more.
+    /// </summary>
+    public void TrimUnpinned() => Trim();
 
     /// <inheritdoc/>
     public bool TryGetTexture(in TextureRef key, out uint texture, out TransitionParams? transition)
@@ -198,6 +245,11 @@ public sealed unsafe class TextureCache : ITextureSource, IDisposable
 
         _map[key] = _lru.AddFirst(new Entry(key, tex, width, height, bytes));
         ResidentBytes += bytes;
+        if (_pinned.Contains(key))
+        {
+            PinnedBytes += bytes;
+        }
+
         Trim();
         return allocated;
     }
@@ -254,6 +306,11 @@ public sealed unsafe class TextureCache : ITextureSource, IDisposable
 
         _lru.Remove(node);
         ResidentBytes -= node.Value.Bytes;
+        if (_pinned.Contains(key))
+        {
+            PinnedBytes -= node.Value.Bytes;
+        }
+
         Retire(node.Value);
         return true;
     }
@@ -292,19 +349,29 @@ public sealed unsafe class TextureCache : ITextureSource, IDisposable
         _lru.Clear();
         _map.Clear();
         _spare.Clear();
+        _pinned.Clear();
         ResidentBytes = 0;
+        PinnedBytes = 0;
         _spareBytes = 0;
     }
 
+    // from the least recently used on, past the textures of the frame being prepared: when only those are left the cache stays above its cap for that frame
     private void Trim()
     {
-        while (ResidentBytes > CapacityBytes && _lru.Last is { } last && _lru.Count > 1)
+        LinkedListNode<Entry>? node = _lru.Last;
+        while (ResidentBytes > CapacityBytes && node is not null && _lru.Count > 1)
         {
-            _lru.RemoveLast();
-            _map.Remove(last.Value.Key);
-            ResidentBytes -= last.Value.Bytes;
-            _evictions++;
-            Retire(last.Value);
+            LinkedListNode<Entry>? newer = node.Previous;
+            if (!_pinned.Contains(node.Value.Key))
+            {
+                _lru.Remove(node);
+                _map.Remove(node.Value.Key);
+                ResidentBytes -= node.Value.Bytes;
+                _evictions++;
+                Retire(node.Value);
+            }
+
+            node = newer;
         }
     }
 

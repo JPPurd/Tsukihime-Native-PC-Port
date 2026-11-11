@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType>
     <AssemblyName>TsukihimeLauncher</AssemblyName>
     <RootNamespace>Tsuki.Launcher.Avalonia</RootNamespace>
-    <Version>0.1.7</Version>
+    <Version>0.1.8</Version>
     <Product>Tsukihime PC port</Product>
     <AssemblyTitle>Tsukihime Launcher</AssemblyTitle>
     <ApplicationIcon>..\..\assets\icon\tsukihime.ico</ApplicationIcon>

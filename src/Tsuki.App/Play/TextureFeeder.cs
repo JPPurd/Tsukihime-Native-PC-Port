@@ -56,7 +56,11 @@ public sealed class TextureFeeder : IDisposable
         ArgumentNullException.ThrowIfNull(cache);
         _data = data;
         _cache = cache;
-        _scheduler = new UploadScheduler(cache, _pool);
+        _scheduler = new UploadScheduler(cache, _pool)
+        {
+            // uploaded: no longer queued, whether or not the cache keeps it (issue #13)
+            Uploaded = key => _queued.Remove(key),
+        };
         _workers = new DecodeWorkers(_scheduler, workers);
     }
 
@@ -88,6 +92,11 @@ public sealed class TextureFeeder : IDisposable
     public void Prefetch(IReadOnlyList<TextureRef> keys)
     {
         ArgumentNullException.ThrowIfNull(keys);
+        if (_cache.PinnedBytes >= _cache.CapacityBytes)
+        {
+            return;             // the frame on the screen fills the cache by itself (issue #13): a look-ahead tile would be evicted the moment it is uploaded
+        }
+
         for (int i = 0; i < keys.Count; i++)
         {
             TextureRef key = keys[i];
@@ -113,6 +122,17 @@ public sealed class TextureFeeder : IDisposable
         _scheduler.UploadSlice();
         _wanted.Clear();
         LastFresh.Clear();
+        // the textures this frame draws are not evicted while it is prepared, however many they are (issue #13). All of them are named before anything is
+        // uploaded: an upload trims the cache, and a movie frame uploaded in the middle of the list evicted the textures named after it
+        _cache.BeginFrame();
+        foreach (ref readonly DrawCmd c in list.Commands)
+        {
+            if (c.Kind == DrawKind.TexturedQuad && c.Texture.Kind is not (TextureKind.Capture or TextureKind.None))
+            {
+                _cache.Pin(c.Texture);                          // a resident one is now the newest too (package K15)
+            }
+        }
+
         int fresh = 0;
         foreach (ref readonly DrawCmd c in list.Commands)
         {
@@ -137,12 +157,7 @@ public sealed class TextureFeeder : IDisposable
                     UploadComposed(key);
                     break;
                 default:
-                    if (_cache.Touch(key))
-                    {
-                        break;                                  // resident: now the newest, so the uploads of this frame cannot evict it (package K15)
-                    }
-
-                    if (!_cache.Contains(key))
+                    if (!_cache.Contains(key) && !_workers.HasFailed(key))
                     {
                         // a tile the look-ahead queued is already on its way; if it still waits among the background jobs it moves to the urgent queue
                         _wanted.Add(key);
@@ -162,6 +177,7 @@ public sealed class TextureFeeder : IDisposable
             }
         }
 
+        _cache.TrimUnpinned();                  // what a larger frame before this one left above the cap
         if (_wanted.Count == 0)
         {
             UploadSliceAndPrune();
@@ -206,7 +222,7 @@ public sealed class TextureFeeder : IDisposable
         int missing = 0;
         foreach (TextureRef k in _wanted)
         {
-            if (!_cache.Contains(k))
+            if (!_cache.Contains(k) && !_workers.HasFailed(k))
             {
                 missing++;
                 _workers.Promote(k);                        // a tile of the look-ahead that a frame now needs jumps the queues

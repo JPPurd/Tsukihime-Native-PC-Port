@@ -77,6 +77,12 @@ public sealed class UploadScheduler
     /// <summary>Bytes uploaded so far.</summary>
     public long UploadedBytes { get; private set; }
 
+    /// <summary>
+    /// Called on the GL thread for every tile <see cref="UploadSlice"/> has uploaded (issue #13). The feeder forgets the key there: a tile that the cache
+    /// evicted again before the feeder looked was "queued" for ever, and a frame that needed it later waited for a decode that never came.
+    /// </summary>
+    public Action<TextureRef>? Uploaded { get; set; }
+
     /// <summary>Queues a decoded tile (thread-safe).</summary>
     public void Enqueue(in DecodedTile tile)
     {
@@ -161,6 +167,7 @@ public sealed class UploadScheduler
 
             Pool.Return(tile.Pixels);
             Interlocked.Decrement(ref _pending);
+            Uploaded?.Invoke(tile.Key);
             tiles++;
             bytes += size;
         }
@@ -185,6 +192,7 @@ public sealed class UploadScheduler
 
             Pool.Return(tile.Pixels);
             Interlocked.Decrement(ref _pending);
+            Uploaded?.Invoke(tile.Key);
             tiles++;
             bytes += tile.Pixels.Length;
             background += tile.Pixels.Length;

@@ -15,6 +15,10 @@ public sealed partial class GameAppWiringTests
         return Whitespace().Replace(LineComment().Replace(text, "$1"), string.Empty);
     });
 
+    // TextureFeeder.cs the same way (issue #13)
+    private static readonly Lazy<string> Feeder = new(() =>
+        Whitespace().Replace(LineComment().Replace(File.ReadAllText(Path.Combine(Repo.Src, "Tsuki.App", "Play", "TextureFeeder.cs")), "$1"), string.Empty));
+
     // the text between two markers of the whitespace-free source
     private static string Between(string from, string to)
     {
@@ -114,6 +118,144 @@ public sealed partial class GameAppWiringTests
         string main = Whitespace().Replace(LineComment().Replace(File.ReadAllText(Path.Combine(Repo.Src, "Tsuki.App", "Program.cs")), "$1"), string.Empty);
         Assert.Contains("if(!AppArgs.TryParse(args,outAppArgs?a,outstring?error)){Console.Error.WriteLine(error);Console.Error.WriteLine(AppArgs.Usage);"
             + "RefuseCommandLine(args,error??\"?\",hidden,OperatingSystem.IsWindows());returnExitUsage;}", main, StringComparison.Ordinal);
+    }
+
+    // Issue #13: the hold for textures. In real play RenderCore does not draw a frame whose textures are not all resident (the picture before it stays), and that
+    // hold had no end: a frame that could never be complete froze the game. No test run reaches the hold's end (it needs textures that never come), so the rules
+    // are read from the source: the hold is given up through TextureHold, the frame is then drawn, and the feeder pins what the frame draws.
+    private static string RenderCore() => Between("privateboolRenderCore(DisplayListlist,refstringstop)", "ExecuteStatsstats=_executor.Execute(list);");
+
+    [Fact]
+    public void TheHoldForTexturesIsGivenUpThroughTheRule()
+    {
+        string core = RenderCore();
+        // real play polls the feeder without waiting, holds only a frame that misses textures, and asks the rule with the hold's age and the tiles in flight
+        Assert.Contains("intmissing=_feeder.EnsureResident(list,_holdMode?TimeSpan.Zero:", core, StringComparison.Ordinal);
+        // the hold's age is the time the loop waited in it, pass by pass (TextureHold.Age caps a pass: a sleeping computer does not end the hold)
+        Assert.Contains(
+            "if(_holdMode&&missing>0&&!_holdGivenUp){longpassNow=Stopwatch.GetTimestamp();if(!_held){_held=true;_holdStart=passNow;_holdLastPass=passNow;_holdAgeMs=0;}"
+            + "_holdAgeMs=TextureHold.Age(_holdAgeMs,Stopwatch.GetElapsedTime(_holdLastPass,passNow).TotalMilliseconds);_holdLastPass=passNow;"
+            + "doubleheldFor=_holdAgeMs;if(!TextureHold.GiveUp(heldFor,_feeder.Pending)){",
+            core,
+            StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("TextureHold.GiveUp(")));
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("_holdStart=")));                       // the hold starts once, when it begins: a poll does not restart it
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("_holdAgeMs=0")));
+    }
+
+    [Fact]
+    public void AFrameDrawnWithoutSomeTexturesIsSaidWhenTheCountChangesNotForEveryFrame()
+    {
+        // real play draws such frames now (a given-up hold, a tile of a damaged file): 60 lines a second went into the player's log
+        Assert.Contains(
+            "if(stats.MissingTextures!=_loggedMissing){_loggedMissing=stats.MissingTextures;if(stats.MissingTextures>0){TextureCacheStatscacheNow=_cache.Stats;Say($\"{stats.MissingTextures}texturesofthisframearenotresident",
+            Code.Value,
+            StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("texturesofthisframearenotresident")));
+    }
+
+    [Fact]
+    public void AGivenUpHoldFallsThroughToDrawingTheFrame()
+    {
+        string core = RenderCore();
+        int rule = core.IndexOf("if(!TextureHold.GiveUp(heldFor,_feeder.Pending)){", StringComparison.Ordinal);
+        int givenUp = core.IndexOf(
+            "_holdGivenUp=true;Say(TextureHold.GaveUpLine(heldFor,missing,_feeder.Pending,_runtime.Host.Script,_cache.Stats.ResidentBytes,_cache.CapacityBytes));}",
+            StringComparison.Ordinal);
+        Assert.True(rule >= 0 && givenUp > rule, "RenderCore gives the hold up after asking TextureHold.GiveUp, and says so in the log");
+
+        // while the hold goes on, the picture before the frame is presented and RenderCore leaves: that is the only way out of the hold without a draw
+        string holding = core[rule..givenUp];
+        Assert.EndsWith("_compositor.Present(hw,hh);_window.Swap();_presents++;}return!_quit;}", holding, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Count(holding, "return"));
+
+        // a given-up hold leaves nowhere before the frame is executed, and the hold is closed on the way (the "held N ms" line and the counters)
+        string after = core[givenUp..];
+        Assert.DoesNotContain("return", after, StringComparison.Ordinal);
+        Assert.Contains("if(_held){_held=false;", after, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OnlyACompleteFrameAllowsANewHold()
+    {
+        string core = RenderCore();
+        // the flag is cleared right after the feeder's answer and only when nothing is missing: the frames after a given-up hold are drawn, not held one by one
+        Assert.Contains("TimeSpan.FromMilliseconds(_hidden?4000:300));if(missing==0){_holdGivenUp=false;}if(_holdMode&&missing>0&&!_holdGivenUp){", core, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("_holdGivenUp=false")));
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("_holdGivenUp=true")));
+        Assert.Contains("privatebool_holdGivenUp;", Code.Value, StringComparison.Ordinal);           // a run starts with the hold allowed
+    }
+
+    [Fact]
+    public void AFrameLargerThanTheCachesCapIsNamedInTheLogOncePerScript()
+    {
+        // once per script, and again when the frame has grown (TextureHold.SayOverCap)
+        Assert.Contains(
+            "if(TextureHold.SayOverCap(_cache.PinnedBytes,_cache.CapacityBytes,_runtime.Host.Script,_overCapScript,_overCapBytes)){_overCapScript=_runtime.Host.Script;_overCapBytes=_cache.PinnedBytes;"
+            + "Say(TextureHold.OverCapLine(_cache.PinnedBytes,_cache.CapacityBytes,_runtime.Host.Script));}",
+            RenderCore(),
+            StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Count(Code.Value, Regex.Escape("TextureHold.OverCapLine(")));
+    }
+
+    [Fact]
+    public void AVerificationRunCanAskForASmallerCardsCache()
+    {
+        // the switch the runs of issue #13 use (a 512 MiB cache on a card with more memory); a value outside 64..8192 MiB, a sign or a blank changes nothing
+        string open = Between("longcacheCap=VideoMemory.CacheCapacity(adapter?.Bytes);", "_cache=newTextureCache(_device.Gl,cacheCap,cacheCap/6)");
+        Assert.Contains(
+            "if(long.TryParse(Environment.GetEnvironmentVariable(\"TSUKI_TEXTURE_CACHE_MIB\"),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,outlongmib)"
+            + "&&mibis>=64and<=8192){cacheCap=mib<<20;}",
+            open,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheFeederPinsEveryTextureOfTheFrameAndTrimsOnceTheyAreNamed()
+    {
+        string feeder = Feeder.Value;
+        int start = feeder.IndexOf("publicintEnsureResident(DisplayListlist,TimeSpanbudget){", StringComparison.Ordinal);
+        int end = feeder.IndexOf("privateintCountMissing()", StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start, "TextureFeeder.cs no longer has EnsureResident before CountMissing");
+        string ensure = feeder[start..end];
+
+        // the frame's set starts before its first texture is named
+        int begin = ensure.IndexOf("_cache.BeginFrame();", StringComparison.Ordinal);
+        int loop = ensure.IndexOf("foreach(refreadonlyDrawCmdcinlist.Commands){", StringComparison.Ordinal);
+        Assert.True(begin >= 0 && begin < loop, "BeginFrame comes before the frame's textures are named");
+        Assert.Equal(1, Regex.Count(feeder, Regex.Escape("_cache.BeginFrame()")));
+
+        // every texture the frame draws is named in a loop of its own, before the loop that uploads: an upload trims the cache, and a movie frame uploaded in
+        // the middle of the list evicted the textures named after it
+        const string Naming = "_cache.BeginFrame();foreach(refreadonlyDrawCmdcinlist.Commands){if(c.Kind==DrawKind.TexturedQuad&&c.Texture.Kindisnot(TextureKind.CaptureorTextureKind.None)){_cache.Pin(c.Texture);}}intfresh=0;foreach(refreadonlyDrawCmdcinlist.Commands){";
+        Assert.Contains(Naming, ensure, StringComparison.Ordinal);
+        Assert.Equal(1, Regex.Count(feeder, Regex.Escape("_cache.Pin(")));
+        Assert.Contains(
+            "caseTextureKind.MovieFrame:UploadMovieFrame(key);break;caseTextureKind.Thumbnail:UploadThumbnail(key);break;"
+            + "caseTextureKind.UiComposed:UploadComposed(key);break;default:if(!_cache.Contains(key)&&!_workers.HasFailed(key)){_wanted.Add(key);",
+            ensure,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("_cache.Touch(", feeder, StringComparison.Ordinal);                    // Touch alone leaves the tile to the uploads of its own frame
+
+        // a tile whose decode threw is not waited for (a damaged game file costs that tile's picture, not a hold of every frame that draws it)
+        Assert.Contains("if(!_cache.Contains(k)&&!_workers.HasFailed(k)){missing++;", feeder, StringComparison.Ordinal);
+
+        // what a larger frame before left above the cap goes once this frame's textures are named, before any wait
+        int trim = ensure.IndexOf("}_cache.TrimUnpinned();if(_wanted.Count==0){UploadSliceAndPrune();return0;}", StringComparison.Ordinal);
+        Assert.True(trim > loop, "TrimUnpinned comes after the loop over the frame's commands");
+        Assert.Equal(1, Regex.Count(feeder, Regex.Escape("_cache.TrimUnpinned()")));
+    }
+
+    [Fact]
+    public void TheLookAheadDoesNothingWhileTheFrameFillsTheCacheAndAnUploadedTileIsNoLongerQueued()
+    {
+        string feeder = Feeder.Value;
+        Assert.Contains(
+            "publicvoidPrefetch(IReadOnlyList<TextureRef>keys){ArgumentNullException.ThrowIfNull(keys);if(_cache.PinnedBytes>=_cache.CapacityBytes){return;}for(",
+            feeder,
+            StringComparison.Ordinal);
+        // a tile the cache evicted again before the feeder looked stayed "queued" for ever, and the frame that needed it later waited for a decode that never came
+        Assert.Contains("_scheduler=newUploadScheduler(cache,_pool){Uploaded=key=>_queued.Remove(key),};", feeder, StringComparison.Ordinal);
     }
 
     private static int Indent(string line) => line.Length - line.TrimStart().Length;

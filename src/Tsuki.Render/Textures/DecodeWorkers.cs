@@ -25,6 +25,7 @@ public sealed class DecodeWorkers : IDisposable
     private readonly ConcurrentQueue<DecodeJob> _jobs = [];
     private readonly ConcurrentDictionary<TextureRef, DecodeJob> _background = [];
     private readonly ConcurrentQueue<TextureRef> _backgroundOrder = [];
+    private readonly ConcurrentDictionary<TextureRef, byte> _failed = [];             // the keys whose decode threw (issue #13)
     private readonly SemaphoreSlim _signal = new(0);
     private readonly Thread[] _threads;
     private readonly UploadScheduler _scheduler;
@@ -66,6 +67,12 @@ public sealed class DecodeWorkers : IDisposable
 
     /// <summary>The first exception a decode threw, if any (the job is dropped).</summary>
     public Exception? Fault => Volatile.Read(ref _fault);
+
+    /// <summary>
+    /// Whether the decode of <paramref name="key"/> threw (issue #13). Such a tile is not decoded again and never becomes resident: the feeder does not wait
+    /// for it, so a damaged game file costs the picture of that tile, not a hold of the whole frame every time it is drawn.
+    /// </summary>
+    public bool HasFailed(in TextureRef key) => !_failed.IsEmpty && _failed.ContainsKey(key);
 
     /// <summary>Queues a job that a frame is waiting for.</summary>
     public void Enqueue(in DecodeJob job)
@@ -118,16 +125,20 @@ public sealed class DecodeWorkers : IDisposable
             while (true)
             {
                 _signal.Wait(_stop.Token);
+
+                // counted as in flight before it leaves its queue: between the two it was counted nowhere, and Pending read 0 with a tile on its way (the hold
+                // for textures gives up sooner when nothing is pending, issue #13)
+                Interlocked.Increment(ref _inFlight);
                 if (!_jobs.TryDequeue(out DecodeJob job))
                 {
                     // a background job: its key may have been promoted already (the token of the promotion serves the urgent copy)
                     if (!_backgroundOrder.TryDequeue(out TextureRef next) || !_background.TryRemove(next, out job))
                     {
+                        Interlocked.Decrement(ref _inFlight);
                         continue;
                     }
                 }
 
-                Interlocked.Increment(ref _inFlight);
                 StagingBuffer? buf = null;
                 try
                 {
@@ -159,6 +170,7 @@ public sealed class DecodeWorkers : IDisposable
                 }
                 catch (Exception e)
                 {
+                    _failed.TryAdd(job.Key, 0);
                     Interlocked.CompareExchange(ref _fault, e, null);
                 }
                 finally
