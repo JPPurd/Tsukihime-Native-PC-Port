@@ -54,7 +54,7 @@ public sealed class LinuxUpdateEndToEndTests : IDisposable
         (string before, string after, int exit) = await Run(install, profile, server.Base);
         Assert.True(exit == 0, before + "\n" + after);
         Assert.Contains("UPDATE SELFTEST PASS", before, StringComparison.Ordinal);
-        Assert.Contains("SELFTEST PASS: 7 pages", after, StringComparison.Ordinal);
+        Assert.Contains("SELFTEST PASS: 8 pages", after, StringComparison.Ordinal);
         Assert.Contains("launcher " + version.Tag, after, StringComparison.Ordinal);
         Assert.Equal("new", File.ReadAllText(Path.Combine(install, "README.md")));
         Assert.True(File.Exists(Path.Combine(install, "K48_UPDATE_MARK.txt")));

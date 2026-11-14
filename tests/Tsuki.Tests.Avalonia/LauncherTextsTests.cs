@@ -73,7 +73,7 @@ public sealed class LauncherTextsTests
         var save = new SaveSummary(true, 3, 1, null, null);
         var backup = new BackupInfo("20261027-153000", "/tmp/b", new DateTime(2026, 10, 27, 15, 30, 0), ["save.dat"], 100, save);
         Assert.Equal(
-            ("Restore this backup?", $"save.dat will be replaced by the backup of 27 Oct 2026, 15:30 ({save.Describe()}). Your current save is backed up first, so you can undo this. Settings are kept as they are.", "Restore"),
+            ("Restore this backup?", $"save.dat will be replaced by the backup of 27 Oct 2026, 15:30 ({save.Describe()}). Your current save is backed up first, so you can undo this. Settings are kept as they are. Achievements are kept too, and the backup's are added to them.", "Restore"),
             LauncherTexts.RestoreQuestion(backup));
         Assert.Equal(
             ("Import this PS4 save?", "savedata000 is read (the file itself is never changed). Its slots and system data replace save.dat; your current save is backed up first.", "Import"),

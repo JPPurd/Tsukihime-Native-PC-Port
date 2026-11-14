@@ -61,7 +61,8 @@ public sealed class UiRealDataTests
         Assert.All(cmds.Where(c => c.Fx.Pass == QuadPass.Blur), c => Assert.Equal(TextureKind.Capture, c.Texture.Kind));
         foreach (DrawCmd c in cmds.Where(c => c.Kind == DrawKind.TexturedQuad && c.Fx.Pass != QuadPass.Blur))
         {
-            // the title's EXIT cell (UiComposed, package K33) is composed from the player's sheets at run time
+            // the title's EXIT cell (UiComposed, package K33) is composed from the player's sheets at run time; the achievement notice's emblems (UiComposed,
+            // v0.1.9) are drawn by the port
             Assert.True(c.Texture.Kind is TextureKind.UiTile or TextureKind.GlyphPage or TextureKind.PictureTile or TextureKind.Thumbnail or TextureKind.UiComposed, $"{screen} {lang}: {c.Texture}");
             Assert.True(float.IsFinite(c.V0.X) && float.IsFinite(c.V3.Y) && c.V0.U is >= -0.001f and <= 1.001f && c.V3.V is >= -0.001f and <= 1.001f);
         }
@@ -110,10 +111,21 @@ public sealed class UiRealDataTests
                     break;
                 case TextureKind.UiComposed:
                 {
-                    // composed from the sheets of the key's own language (package K33); 296 x 72 like the item cells it is cut from
+                    // the title's EXIT cell, composed from the sheets of the key's own language (package K33), 296 x 72 like the item cells it is cut from;
+                    // or the emblem of an achievement notice's grade (v0.1.9), which the port draws at the icons' 72 x 72 from no game data
                     UiComposedPicture? pic = root.Context.Assets.Composed(t.A, (Language)t.B);
                     Assert.NotNull(pic);
-                    Assert.Equal((296, 72), (pic.Width, pic.Height));
+                    if (UiComposedId.IsTrophyEmblem(t.A))
+                    {
+                        Assert.Equal((UiTrophyNotice.IconSize, UiTrophyNotice.IconSize), (pic.Width, pic.Height));
+                        Assert.Same(UiAssets.TrophyEmblem((Tsuki.Engine.Trophies.TrophyGrade)(t.A - UiComposedId.TrophyEmblemFirst)), pic);
+                    }
+                    else
+                    {
+                        Assert.True(t.A is UiComposedId.TitleExit or UiComposedId.TitleExitCursor, $"{screen} {lang}: composed picture {t.A}");
+                        Assert.Equal((296, 72), (pic.Width, pic.Height));
+                    }
+
                     Assert.Equal(pic.Width * pic.Height * 4, pic.Rgba.Length);
                     break;
                 }

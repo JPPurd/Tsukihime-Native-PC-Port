@@ -294,7 +294,13 @@ public sealed class GameLayoutRealDataTests : IClassFixture<GameLayoutRealDataTe
         Directory.CreateDirectory(paths.DataDirectory);
         LaunchPlan plan = GameLauncher.Plan(app, folder, paths, fullscreen: false, ["--hidden", "--mute", "--fast", "--autoplay", "--save-dir", paths.DataDirectory, "--exit-after", frames.ToString(System.Globalization.CultureInfo.InvariantCulture)]);
         using Process process = GameLauncher.Start(plan, paths);
-        Assert.True(process.WaitForExit(240_000), $"{name}: the game did not exit");
+        if (!process.WaitForExit(240_000))
+        {
+            process.Kill(entireProcessTree: true);          // a game that hangs is stopped before the test fails: the one this test started, and nothing else
+            process.WaitForExit(10_000);
+            Assert.Fail($"{name}: the game did not exit");
+        }
+
         exitCode = process.ExitCode;
         string log = File.Exists(paths.LastRunLog) ? File.ReadAllText(paths.LastRunLog) : string.Empty;
         output.WriteLine($"--- {name}: exit {exitCode}");

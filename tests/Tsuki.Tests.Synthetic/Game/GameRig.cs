@@ -75,6 +75,11 @@ public sealed class RigFlow : IGameFlowTables
     public IReadOnlyList<int> JumpKeepBits => [];
 
     public IReadOnlyList<(int LastColumn, int Word)> JumpClears => [];
+
+    /// <summary>The trophy scene table of the rig: empty unless a test fills it (index i is the scene of trophy i + 1).</summary>
+    public List<int> TrophySceneList { get; } = [];
+
+    public IReadOnlyList<int> TrophyScenes => TrophySceneList;
 }
 
 /// <summary>The scripts of the rig.</summary>

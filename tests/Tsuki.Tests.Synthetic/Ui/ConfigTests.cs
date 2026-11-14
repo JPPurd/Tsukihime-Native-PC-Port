@@ -366,18 +366,18 @@ public sealed class ConfigTests
         Assert.True(fx > wx);
         Assert.True(sy > wy);
         Assert.Equal(wx, sx);
-        Assert.Equal(750f + ConfigScreen.BandFor(7), screen.ScrollMaximum);               // the two display rows, then the screenshot notice, clipboard, hooker and WebSocket rows and the opacity slider of packages K21, K23 and K24
-        Assert.Equal(750f + 160f + 280f, screen.ScrollMaximum);                           // K19's band was 160 for its two rows; each later row adds 56
-        // the rows are the first two of the band's seven grid rows, in that order
+        Assert.Equal(750f + ConfigScreen.BandFor(9), screen.ScrollMaximum);               // the two display rows, then the screenshot notice, achievement notice and sound (v0.1.9), clipboard, hooker and WebSocket rows and the opacity slider of packages K21, K23 and K24
+        Assert.Equal(750f + 160f + 392f, screen.ScrollMaximum);                           // K19's band was 160 for its two rows; each later row adds 56
+        // the rows are the first two of the band's nine grid rows, in that order
         IReadOnlyList<IReadOnlyList<Ctl>> grid = screen.GridRows();
-        Assert.Equal([new Ctl(CtlKind.Display, 0), new Ctl(CtlKind.Display, 1)], grid[^7]);
-        Assert.Equal(s.Display.SizeChoices.Count, grid[^6].Count);
-        Assert.All(grid[^6], c => Assert.Equal(CtlKind.WindowSize, c.Kind));
+        Assert.Equal([new Ctl(CtlKind.Display, 0), new Ctl(CtlKind.Display, 1)], grid[^9]);
+        Assert.Equal(s.Display.SizeChoices.Count, grid[^8].Count);
+        Assert.All(grid[^8], c => Assert.Equal(CtlKind.WindowSize, c.Kind));
 
         (_, _, ConfigScreen none) = Open(x => x.Display = null);
         Assert.False(none.HasDisplayRows);
         Assert.DoesNotContain(none.Layout, t => t.Ctl.Kind is CtlKind.Display or CtlKind.WindowSize);
-        Assert.Equal(750f + ConfigScreen.BandFor(5), none.ScrollMaximum);                 // the band keeps the K21, K23 and K24 rows
+        Assert.Equal(750f + ConfigScreen.BandFor(7), none.ScrollMaximum);                 // the band keeps the K21, K23 and K24 rows and the achievement notice and sound rows
     }
 
     [Fact]
@@ -425,6 +425,10 @@ public sealed class ConfigTests
         Assert.Equal(new Ctl(CtlKind.WindowSize, 3), At(screen, screen.Cursor));
         UiTestKit.Press(root, PadButtons.Down);                                   // below the size row: the screenshot notice row (package K24), the column clamped to its last pill
         Assert.Equal(new Ctl(CtlKind.ScreenshotNotice, 1), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Down);                                   // the achievement notice row (v0.1.9)
+        Assert.Equal(new Ctl(CtlKind.TrophyNotice, 1), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Down);                                   // its sound's row (v0.1.9)
+        Assert.Equal(new Ctl(CtlKind.TrophySound, 1), At(screen, screen.Cursor));
         UiTestKit.Press(root, PadButtons.Down);                                   // the clipboard row (package K21)
         Assert.Equal(new Ctl(CtlKind.CopyText, 1), At(screen, screen.Cursor));
         UiTestKit.Press(root, PadButtons.Down);                                   // the hooker and WebSocket rows (package K23)
@@ -441,6 +445,10 @@ public sealed class ConfigTests
         Assert.Equal(new Ctl(CtlKind.TextHooker, 0), At(screen, screen.Cursor));
         UiTestKit.Press(root, PadButtons.Up);
         Assert.Equal(new Ctl(CtlKind.CopyText, 0), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Up);
+        Assert.Equal(new Ctl(CtlKind.TrophySound, 0), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Up);
+        Assert.Equal(new Ctl(CtlKind.TrophyNotice, 0), At(screen, screen.Cursor));
         UiTestKit.Press(root, PadButtons.Up);
         Assert.Equal(new Ctl(CtlKind.ScreenshotNotice, 0), At(screen, screen.Cursor));
         UiTestKit.Press(root, PadButtons.Up);
@@ -484,11 +492,11 @@ public sealed class ConfigTests
         // a monitor that takes only two presets shows two pills, and the grid follows
         s.Display.SizeChoices = [(1280, 720), (1600, 900)];
         Assert.Equal(2, screen.Layout.Count(t => t.Ctl.Kind == CtlKind.WindowSize));
-        Assert.Equal(2, screen.GridRows()[^6].Count);
+        Assert.Equal(2, screen.GridRows()[^8].Count);
         s.Display.SizeChoices = [];
         Assert.DoesNotContain(screen.Layout, t => t.Ctl.Kind == CtlKind.WindowSize);
-        Assert.Equal([new Ctl(CtlKind.Display, 0), new Ctl(CtlKind.Display, 1)], screen.GridRows()[^6]);      // the K21, K23 and K24 rows stay below it
-        Assert.Equal(750f + ConfigScreen.BandFor(6), screen.ScrollMaximum);
+        Assert.Equal([new Ctl(CtlKind.Display, 0), new Ctl(CtlKind.Display, 1)], screen.GridRows()[^8]);      // the K21, K23 and K24 rows and the achievement notice and sound rows stay below it
+        Assert.Equal(750f + ConfigScreen.BandFor(8), screen.ScrollMaximum);
     }
 
     [Fact]

@@ -84,6 +84,93 @@ public sealed class GalleryRealDataTests
     }
 
     [GameDataFact]
+    public void TheViewerTakesALanguageStripAtTheCatalogsBandStrideAndTheGridTheLanguagesThumbnailFrame()
+    {
+        // the 11 pictures that stack a strip per language store the four a tile-rounded height apart, the engine's band stride (images.md 8.1): the picture is
+        // 4 x stride high, the catalog's own record (7 of them have one; 4 are gallery-only) names the same rows, and every strip has rows between it and the next
+        var assets = new UiAssets(SharedSource.Source, Language.En);
+        Dictionary<string, Tsuki.Data.Catalog.CatalogEntry> records = SharedSource.Source.Catalog.Images.Entries
+            .GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        GalleryCg[] strips = [.. Model.Groups.SelectMany(g => g).Where(c => c.LanguageStrip)];
+        Assert.Equal(11, strips.Length);
+        int withRecord = 0;
+        foreach (GalleryCg cg in strips)
+        {
+            (int archive, int entry) = assets.Tables.FindPicture(cg.Row.Name)!.Value;
+            Tsuki.Data.Images.ImageHeader header = SharedSource.Source.OpenImage(archive, entry).Header;
+            Assert.Equal(4 * cg.BandStride, header.DisplayHeight);
+            Assert.True(cg.BandStride > cg.Row.Height, $"{cg.Row.Name}: stride {cg.BandStride}, height {cg.Row.Height}");
+            Assert.Equal(0, cg.BandStride % Tsuki.Data.Catalog.CatalogEntry.BandAlign);
+            if (records.TryGetValue(cg.Row.Name, out Tsuki.Data.Catalog.CatalogEntry? record))
+            {
+                withRecord++;
+                Assert.True(record.HasLanguageBands, cg.Row.Name);
+                Assert.Equal(record.BandStride, cg.BandStride);
+                foreach (Language language in Languages)
+                {
+                    PixelRect band = record.SourceRect((int)language);
+                    Assert.Equal(new RectF(band.X, band.Y, band.Width, band.Height), cg.Source(language));
+                }
+            }
+
+            // its thumbnail sheet stacks a 231 x 130 frame per language, with no rows between, and the grid shows the language's
+            Picture sheet = SharedSource.Source.UiSheetLayout(UiSet.GalleryPartsCgTh, Language.En, cg.Row.Thumbnail);
+            Assert.Equal((231, 520), (sheet.Width, sheet.Height));
+            foreach (Language language in Languages)
+            {
+                Assert.Equal(new RectF(0, 130 * (int)language, 231, 130), cg.ThumbSource(language));
+            }
+        }
+
+        Assert.Equal(7, withRecord);
+
+        // a picture of one strip keeps its rectangle and the first thumbnail frame in every language
+        GalleryCg plain = Model.Groups.SelectMany(g => g).First(c => !c.LanguageStrip);
+        Assert.All(Languages, l => Assert.Equal(new RectF(plain.Row.X, plain.Row.Y, plain.Row.Width, plain.Row.Height), plain.Source(l)));
+        Assert.All(Languages, l => Assert.Equal(new RectF(0, 0, 231, 130), plain.ThumbSource(l)));
+
+        // the pixels say so too: in the two 1080-row pictures (IMG2581 has a record, IMG4026 is gallery-only) every strip at the stride is the first one with other
+        // words, nearly the same rows, while the rows a height apart (where the viewer took them before) are another part of the picture
+        foreach (string name in new[] { "IMG2581.MZP", "IMG4026.MZP" })
+        {
+            GalleryCg cg = strips.Single(c => c.Row.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal((1080, 1270), (cg.Row.Height, cg.BandStride));
+            (int archive, int entry) = assets.Tables.FindPicture(cg.Row.Name)!.Value;
+            Picture picture = SharedSource.Source.Picture(archive, entry);
+            byte[] rgba = UiComposed.Assemble(picture);
+            for (int language = 1; language < 4; language++)
+            {
+                double atStride = StripDifference(rgba, picture.Width, cg.Row.Width, cg.Row.Height, language * cg.BandStride);
+                double atHeight = StripDifference(rgba, picture.Width, cg.Row.Width, cg.Row.Height, language * cg.Row.Height);
+                Assert.True(atStride < 30 && atHeight > 3 * atStride, $"{name}, strip {language}: {atStride:F1} at the stride, {atHeight:F1} a height apart");
+            }
+        }
+    }
+
+    // the mean difference of the colours (every fourth pixel and row) between the first strip and the rows from `top` of the same picture
+    private static double StripDifference(byte[] rgba, int stride, int width, int height, int top)
+    {
+        long sum = 0;
+        long count = 0;
+        for (int y = 0; y < height; y += 4)
+        {
+            for (int x = 0; x < width; x += 4)
+            {
+                int a = ((y * stride) + x) * 4;
+                int b = (((top + y) * stride) + x) * 4;
+                for (int c = 0; c < 3; c++)
+                {
+                    sum += Math.Abs(rgba[a + c] - rgba[b + c]);
+                }
+
+                count += 3;
+            }
+        }
+
+        return sum / (double)count;
+    }
+
+    [GameDataFact]
     public void EveryFlowNodeHasAPreviewAndAMosaicCell()
     {
         int previews = SharedSource.Source.UiSheetChildCount(UiSet.GalleryPartsFcTh, Language.En);

@@ -7,7 +7,7 @@ namespace Tsuki.Tests.Synthetic.App;
 /// <summary>
 /// deck-evidence-3: a Linux or macOS start without --log (from Steam, the file manager) leaves its log in the profile under the launcher's name, last_run.log,
 /// and the console still gets every line. unix-2: the file is best effort; a write the disk refuses (ENOSPC on a full Steam Deck, EDQUOT) drops it, says so on
-/// the console and the game goes on, with or without --log.
+/// the console and the game goes on, with or without --log. v0.1.9: the --log file of a Windows game is the same best-effort writer.
 /// </summary>
 public sealed class RunLogFileTests
 {
@@ -124,14 +124,15 @@ public sealed class RunLogFileTests
     }
 
     [Fact]
-    public void OffWindowsALogFileGoesToTheConsoleOnlyOnceItFails()
+    public void ALogFileGoesToTheConsoleOnlyOnceItFails()
     {
+        // On Windows too (v0.1.9): until then the --log file of a Windows game was the bare StreamWriter, and the first line the disk refused ended a game the
+        // launcher had started (its PLAY always names last_run.log); the failure path's own first statement writes the log, and so did not get to crash.log.
         var console = new StringWriter();
         var disk = new FullDisk();
         var file = new StreamWriter(disk, new UTF8Encoding(false)) { AutoFlush = true };
-        Assert.Same(file, GameApp.LogFileWriter(file, "/tmp/run.log", windows: true, console));      // Windows: the file itself, as v0.1.6
-
-        TextWriter log = GameApp.LogFileWriter(file, "/tmp/run.log", windows: false, console);
+        TextWriter log = GameApp.LogFileWriter(file, "/tmp/run.log", console);
+        Assert.IsType<TeeWriter>(log);
         log.WriteLine("Tsukihime 0.1.7");
         Assert.Equal(string.Empty, console.ToString());                                                // --log: the file alone while it takes the lines
         disk.Full = true;
@@ -144,11 +145,38 @@ public sealed class RunLogFileTests
             console.ToString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TheFailurePathsLogLineAndTheCloseOfALogFileThatFailsDoNotThrow(bool access)
+    {
+        // GameApp.Run's handler writes "... failed: <exception>" to the log before it writes crash.log and shows the box, and GameApp.Dispose closes the log: with
+        // the --log file of any system neither throws when the file refuses (the line reaches the console instead, and the refusal is said there once)
+        var console = new StringWriter();
+        var file = new BrokenWriter(access);
+        TextWriter log = GameApp.LogFileWriter(file, "/tmp/run.log", console);
+        log.WriteLine("Tsukihime failed: System.InvalidOperationException: the real fault");
+        log.Dispose();
+        Assert.Equal(1, file.Disposed);
+        string failure = $"the log file /tmp/run.log could not be written: {(access ? "Access to the path is denied." : "Disk quota exceeded")}; the log goes to the console only";
+        Assert.Equal(string.Join(Environment.NewLine, failure, "Tsukihime failed: System.InvalidOperationException: the real fault", string.Empty), console.ToString());
+
+        // a file that takes every line and refuses only its close (the last flush of a full disk)
+        console = new StringWriter();
+        var disk = new FullDisk();
+        log = GameApp.LogFileWriter(new StreamWriter(disk, new UTF8Encoding(false)), "/tmp/run.log", console);
+        log.WriteLine("done: 900 steps");
+        disk.Full = true;
+        log.Dispose();
+        Assert.True(disk.Closed);
+        Assert.Equal("the log file /tmp/run.log could not be written: No space left on device; the log goes to the console only" + Environment.NewLine, console.ToString());
+    }
+
     [Fact]
     public void TheGameOpensItsLogFilesThroughTheBestEffortWriters()
     {
         string code = string.Concat(File.ReadAllText(Path.Combine(Repo.Src, "Tsuki.App", "Play", "GameApp.cs")).Where(c => !char.IsWhiteSpace(c)));
-        Assert.Contains("log=LogFileWriter(newStreamWriter(path,false,newUTF8Encoding(false)){AutoFlush=true},path,OperatingSystem.IsWindows(),Console.Out);", code, StringComparison.Ordinal);
+        Assert.Contains("log=LogFileWriter(newStreamWriter(path,false,newUTF8Encoding(false)){AutoFlush=true},path,Console.Out);", code, StringComparison.Ordinal);
         Assert.Contains("log=newTeeWriter(Console.Out,newStreamWriter(lastRun,false,newUTF8Encoding(false)){AutoFlush=true},lastRun);", code, StringComparison.Ordinal);
     }
 

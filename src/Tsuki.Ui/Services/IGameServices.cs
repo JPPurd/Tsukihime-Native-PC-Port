@@ -131,6 +131,12 @@ public interface IUiPortSettings
 
     /// <summary>Package K24: the short "Screenshot saved" notice after F12 (On by default); Off saves the picture silently.</summary>
     bool ScreenshotNotice { get; set; }
+
+    /// <summary>v0.1.9: the notice at the top right when an achievement is earned (Off by default: the player turns it on); Off records the achievement silently.</summary>
+    bool TrophyNotice { get; set; }
+
+    /// <summary>v0.1.9: a short chime as an achievement's notice comes in (Off by default); it sounds only while <see cref="TrophyNotice"/> is on too.</summary>
+    bool TrophySound { get; set; }
 }
 
 /// <summary>

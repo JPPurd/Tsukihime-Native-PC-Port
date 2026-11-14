@@ -45,7 +45,13 @@ public sealed class ExitFromTitleTests : IDisposable
         }
 
         using Process process = Process.Start(info)!;
-        Assert.True(process.WaitForExit(180_000), "the game did not exit");
+        if (!process.WaitForExit(180_000))
+        {
+            process.Kill(entireProcessTree: true);          // a game that hangs is stopped before the test fails: the one this test started, and nothing else
+            process.WaitForExit(10_000);
+            Assert.Fail("the game did not exit");
+        }
+
         return (process.ExitCode, File.ReadAllText(log));
     }
 
@@ -111,5 +117,69 @@ public sealed class ExitFromTitleTests : IDisposable
         Assert.Contains("window mode: windowed (remembered)", log, StringComparison.Ordinal);
         Assert.Equal(0, SaveTools.Summarize(Path.Combine(save, "save.dat")).WindowMode);
         Assert.Equal(true, AppSettings.Load(settings).Fullscreen);                      // the file alone decides nothing
+    }
+
+    // FIXES D11 (the checker of G-1): a game that ends between the two renames of a commit (killed, a crash, the power) leaves no save.dat, the previous
+    // generation as save.dat.bak and the newest one, whole, under its temporary name. The next start said "no save file: a new profile", and that profile's
+    // second commit wrote over the backup. The two generations here are the real program's own: one remembers fullscreen, the other windowed.
+    [GameDataFact]
+    public void ASaveCutOffBetweenItsTwoRenamesIsTheSaveFileAtTheNextStart()
+    {
+        string save = Path.Combine(_root, "profile-cut-off");
+        Directory.CreateDirectory(save);
+        string path = Path.Combine(save, "save.dat");
+        (int code, _) = Run(save, "--windowed", "--exit-after", "30");
+        Assert.Equal(0, code);
+        Assert.Equal(0, SaveTools.Summarize(path).WindowMode);
+        byte[] previous = File.ReadAllBytes(path);
+        (code, _) = Run(save, "--fullscreen", "--exit-after", "30");
+        Assert.Equal(0, code);
+        Assert.Equal(1, SaveTools.Summarize(path).WindowMode);
+        byte[] newest = File.ReadAllBytes(path);
+
+        // the state the cut-off commit leaves
+        File.Delete(path);
+        File.WriteAllBytes(path + ".bak", previous);
+        File.SetLastWriteTimeUtc(path + ".bak", DateTime.UtcNow.AddSeconds(-30));
+        File.WriteAllBytes(path + ".0a1b2c3d.tmp", newest);
+
+        (code, string log) = Run(save, "--exit-after", "30");
+        Assert.Equal(0, code);
+        Assert.Contains("was not there: a save had been cut off before its end, and its file save.dat.0a1b2c3d.tmp is the save file now", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("no save file: a new profile", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("damaged", log, StringComparison.Ordinal);
+        Assert.Contains("window mode: fullscreen (remembered)", log, StringComparison.Ordinal);       // the newest generation was read, not the backup and not a new profile
+        Assert.Equal(1, SaveTools.Summarize(path).WindowMode);
+        Assert.Equal(1, SaveTools.Summarize(path + ".bak").WindowMode);                             // and it is the backup of the run's own commit, as after every commit
+        Assert.Empty(Directory.GetFiles(save, "*.tmp"));
+        Assert.Empty(Directory.GetFiles(save, "*.broken*"));
+    }
+
+    // FIXES D13 S-1a: no save.dat and no save.dat.bak is a profile somebody reset by removing them. A temporary file a commit left behind before that (a game
+    // killed while it saved; nothing removes those files) is not a cut-off commit's: the first of a commit's two renames always leaves the backup. Without the
+    // backup the start took such a file of any age, so the reset brought an old save back.
+    [GameDataFact]
+    public void ATemporaryFileWithoutABackupIsNotBroughtBackAsTheSave()
+    {
+        string save = Path.Combine(_root, "profile-reset");
+        Directory.CreateDirectory(save);
+        string path = Path.Combine(save, "save.dat");
+        (int code, _) = Run(save, "--exit-after", "30");
+        Assert.Equal(0, code);
+        byte[] old = File.ReadAllBytes(path);
+
+        // the reset, with the stray file left where it was
+        File.Delete(path);
+        File.Delete(path + ".bak");
+        string stray = path + ".0a1b2c3d.tmp";
+        File.WriteAllBytes(stray, old);
+
+        (code, string log) = Run(save, "--exit-after", "30");
+        Assert.Equal(0, code);
+        Assert.Contains("no save file: a new profile", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("had been cut off", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("damaged", log, StringComparison.Ordinal);
+        Assert.Equal(old, File.ReadAllBytes(stray));                                                // and nothing removes or changes it
+        Assert.True(File.Exists(path));                                                             // the new profile's own save
     }
 }

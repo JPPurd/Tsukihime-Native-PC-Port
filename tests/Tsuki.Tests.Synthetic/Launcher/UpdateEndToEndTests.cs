@@ -88,6 +88,30 @@ public sealed class UpdateEndToEndTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Waits for a process a test started. One that has not ended by then is stopped, through the test's own Process object (no other process, and never by
+    /// name), so that a launcher that hangs does not stay behind, hidden, on the machine that ran the tests (v0.1.9 FIXES D11 W-1). False when it was stopped.
+    /// </summary>
+    internal static bool EndedOrStopped(Process started, int milliseconds)
+    {
+        if (started.WaitForExit(milliseconds))
+        {
+            return true;
+        }
+
+        try
+        {
+            started.Kill();
+            _ = started.WaitForExit(15_000);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // it ended in this moment
+        }
+
+        return false;
+    }
+
     /// <summary>Runs the installed launcher's update self-test and returns both reports (the old launcher's and the one it restarted into).</summary>
     internal static (string Before, string After, int Exit) RunUpdate(string install, string profile, Uri api, string reportDir, params string[] extra)
     {
@@ -101,7 +125,7 @@ public sealed class UpdateEndToEndTests : IDisposable
         // the launcher's own check of the game folder is not what this test is about: no game folder for it (and nothing of the player's profile: --data)
         info.Environment.Remove("TSUKI_GAME_DIR");
         using Process first = Process.Start(info)!;
-        Assert.True(first.WaitForExit(120_000), "the old launcher ended");
+        Assert.True(EndedOrStopped(first, 120_000), "the old launcher ended");
         string before = File.Exists(report) ? File.ReadAllText(report) : "(no report)";
         string afterPath = report + ".after.txt";
         var clock = Stopwatch.StartNew();

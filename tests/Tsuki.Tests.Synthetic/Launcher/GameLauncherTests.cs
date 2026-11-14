@@ -117,4 +117,20 @@ public sealed class GameLauncherTests : IDisposable
         string[] missing = InputMapper.Bindings.Select(b => b.Input).Where(KeyTable.IsKeyboardBinding).Where(k => !listed.Contains(k)).ToArray();
         Assert.True(missing.Length == 0, "keyboard bindings the Controls page does not list: " + string.Join("; ", missing));
     }
+
+    [Fact]
+    public void TheScreenshotKeysLineSaysNotifyAndAShortMessage()
+    {
+        // v0.1.9 (FIXES D9): the owner's word is "Notify", not "Notice". The F12 line of the Controls and Help pages (Windows, and Linux through
+        // UnixLauncherPages) and of the game's own key list names the Config row by its new heading and calls the toast "a short message", the word of
+        // the Achievements page's switch
+        KeyRow f12 = Assert.Single(KeyTable.Rows, r => r.Keys == "F12");
+        Assert.Contains("(a short message follows; Config › System › Screenshot Notify turns it off)", f12.Action, StringComparison.Ordinal);
+        Binding bound = Assert.Single(InputMapper.Bindings, b => b.Input == "F12");
+        Assert.Contains("a short message follows unless Config > System > Screenshot Notify is Off", bound.Action, StringComparison.Ordinal);
+        foreach (string words in KeyTable.Rows.Select(r => r.Action).Concat(InputMapper.Bindings.Select(b => b.Action)))
+        {
+            Assert.DoesNotContain("notice", words, StringComparison.OrdinalIgnoreCase);
+        }
+    }
 }

@@ -17,6 +17,9 @@ internal sealed record ClearOp(byte R, byte G, byte B, byte A) : CaseOp;
 /// <summary>Overwrite the frame with a texture of the frame size (test setup).</summary>
 internal sealed record LoadOp(string Texture) : CaseOp;
 
+/// <summary>The next display list begins (v0.1.9: what a list does after the overlay mark of the one before it depends on where it begins).</summary>
+internal sealed record FrameOp : CaseOp;
+
 /// <summary>
 /// A display-list command. <paramref name="StateOverride"/>: the command's blend state is set on purpose instead of
 /// resolved from its word, and lists.json carries it; otherwise compose decodes the word itself, so a wrong
@@ -50,6 +53,13 @@ internal sealed class AlignedCase(string id, string group)
     public AlignedCase Add(in DrawCmd cmd, bool stateOverride = false)
     {
         Ops.Add(new CmdOp(cmd, stateOverride));
+        return this;
+    }
+
+    /// <summary>Ends the list: the ops after it are the next frame's list.</summary>
+    public AlignedCase Frame()
+    {
+        Ops.Add(new FrameOp());
         return this;
     }
 
@@ -134,12 +144,16 @@ internal sealed class AlignedSuite(int width, int height)
                 AlignedCase k = Cases[i];
                 source.Transition = k.Transition;
                 list.Reset(i);
+                c.BeginFrame();                         // a case never gets back the frame an earlier case kept at its overlay mark (compose starts each case afresh)
                 foreach (CaseOp op in k.Ops)
                 {
                     switch (op)
                     {
                         case CmdOp cmd:
                             list.Add(cmd.Cmd);
+                            break;
+                        case FrameOp:
+                            Flush(exec, list, i);
                             break;
                         case ClearOp cl:
                             Flush(exec, list, i);
@@ -240,6 +254,12 @@ internal sealed class AlignedSuite(int width, int height)
             case CmdOp { Cmd.Kind: DrawKind.Capture } cap:
                 w.WriteString("op", "capture");
                 w.WriteNumber("surface", cap.Cmd.Texture.A);
+                break;
+            case CmdOp { Cmd.Kind: DrawKind.OverlaysBegin }:
+                w.WriteString("op", "overlays");
+                break;
+            case FrameOp:
+                w.WriteString("op", "frame");
                 break;
             case CmdOp q:
                 WriteQuad(w, k, q.Cmd, q.StateOverride);

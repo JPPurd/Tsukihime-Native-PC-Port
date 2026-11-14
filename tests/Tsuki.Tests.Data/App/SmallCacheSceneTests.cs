@@ -5,12 +5,25 @@ using System.Text.RegularExpressions;
 namespace Tsuki.Tests.Data.App;
 
 /// <summary>
+/// The xunit collection that runs alone, for the tests that hold the real game to a time: the 8 s hold for textures of the issue #13 scene
+/// (<c>TextureHold.LimitMs</c>) and the step an exit-after ends at. Run beside the other Data tests that start the game, the scene's tiles were decoded on a
+/// shared CPU and the hold was given up now and then with nothing wrong in the game (2 of 5 full runs on 2026-11-12: 473 and 1016 tiles still in flight).
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class SerialGameTimingCollection
+{
+    /// <summary>The collection name.</summary>
+    public const string Name = "serial-game-timing";
+}
+
+/// <summary>
 /// Issue #13 on the real game, in the real program (hidden, muted, a temporary profile): the scene 03_00_ARC03_5B (script 70) has one frame that draws more
 /// picture tiles than the 512 MiB texture cache of a card with 1.5 GB or less. The run asks for that cache (<c>TSUKI_TEXTURE_CACHE_MIB</c>), jumps to the scene's
 /// flowchart node and skips through it the way real play runs (no <c>--fast</c> and no screenshots, so a frame whose textures are not all resident is held).
 /// Before the fix the frame's own uploads evicted its first tiles, the frame was never complete, and the game stopped stepping at it for ever (step 956 of this
 /// run, the script's cursor near 53000): the process never reached its <c>--exit-after</c>.
 /// </summary>
+[Collection(SerialGameTimingCollection.Name)]
 public sealed partial class SmallCacheSceneTests : IDisposable
 {
     private const int Node = 356;                       // the flowchart node of the scene
@@ -86,7 +99,7 @@ public sealed partial class SmallCacheSceneTests : IDisposable
         Assert.Equal(0, process.ExitCode);
         Assert.True(Line("texture cache: 512 MiB (") is not null, "the run did not get the 512 MiB cache it asked for");
         Assert.True(Line($"tour: node {Node} (scene ") is not null, $"the run did not jump to node {Node}");
-        Assert.True(Line($"done: {Steps} steps in ") is not null, $"the run did not end after {Steps} steps (last step {lastStep})");
+        Assert.True(Line($"done: {Steps} steps in ") is not null, $"the run did not end after {Steps} steps (last step {lastStep}): {DoneLine(Line("done: "))}");
 
         // no hold was given up and no frame was drawn with a hole
         None("gave up holding for textures", "a hold for textures was given up");
@@ -107,6 +120,48 @@ public sealed partial class SmallCacheSceneTests : IDisposable
         int script = int.Parse(states[^1].Groups[2].ValueSpan, CultureInfo.InvariantCulture);
         int cursor = int.Parse(states[^1].Groups[3].ValueSpan, CultureInfo.InvariantCulture);
         Assert.True(script != Script || cursor > CursorPastTheFrame, $"the story is at cursor {cursor} of script {script} at step {states[^1].Groups[1].Value}: it did not pass the frame");
+    }
+
+    // the run's last line up to its textures (the rest names the story's pictures)
+    private static string DoneLine(string? line) => line is null ? "no done line" : line.Split("; textures", 2)[0];
+
+    [GameDataFact]
+    public void ARunEndsAtTheStepOfItsExitAfterAlsoWhenAPassOfTheLoopIsBehindTheClock()
+    {
+        // what failed the test above now and then in a full parallel run of the Data tests: a pass of the loop takes every step that is due, two to five after a
+        // slow frame, and --exit-after was checked only once the pass was done, so the run could end a step or more past it. Here the frame of
+        // step 100 is made slow on purpose: the script writes four pictures of it (a script's pictures also turn the hold for textures off, so no hold takes the
+        // lag away). On this machine that frame takes about 40 ms, the next pass is two steps behind, and before the fix the run ended at step 102
+        string game = GameFolder.Require();
+        string app = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "Tsukihime.exe" : "Tsukihime");
+        string log = Path.Combine(_root, "slow.log");
+        string save = Path.Combine(_root, "slow-profile");
+        string shots = Path.Combine(_root, "slow-shots");
+        Directory.CreateDirectory(save);
+        var info = new ProcessStartInfo(app) { WorkingDirectory = Path.GetDirectoryName(app)!, UseShellExecute = false };
+        info.Environment["SDL_AUDIO_DRIVER"] = "dummy";
+        foreach (string a in new[]
+        {
+            "--game", game, "--log", log, "--hidden", "--mute", "--windowed", "--save-dir", save, "--shot-dir", shots,
+            "--script", "100:shot=a;100:shot=b;100:shot=c;100:shot=d", "--exit-after", "101",
+        })
+        {
+            info.ArgumentList.Add(a);
+        }
+
+        using Process process = Process.Start(info)!;
+        if (!process.WaitForExit(Limit))
+        {
+            process.Kill(entireProcessTree: true);          // the game this test started, and nothing else
+            process.WaitForExit(10_000);
+            Assert.Fail("the game did not exit");
+        }
+
+        Assert.Equal(0, process.ExitCode);
+        string text = File.ReadAllText(log);
+        Assert.Equal(4, Directory.GetFiles(shots, "*.png").Length);
+        string? done = text.Split('\n', StringSplitOptions.TrimEntries).FirstOrDefault(l => l.StartsWith("done: ", StringComparison.Ordinal));
+        Assert.True(done is not null && done.StartsWith("done: 101 steps in ", StringComparison.Ordinal) && done.Contains("(exit-after 101)", StringComparison.Ordinal), DoneLine(done));
     }
 
     [GeneratedRegex(@"^\[ *(\d+)\] ", RegexOptions.Multiline)]

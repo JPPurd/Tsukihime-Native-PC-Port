@@ -10,7 +10,8 @@ namespace Tsuki.Tests.Render.Compositor;
 /// <c>tsuki.compose.execute_list</c> with the fp16 round-toward-zero export model (compositing.md 2.6), on a
 /// 256 x 256 test pattern: every _STBR mode as ordinary, flagged and masked layer, the named effects 52..67, all 14
 /// blend states, fills, the rule mask, the two-pass rule wipe, the cross-fade, the _FADS transition start
-/// built by <see cref="FadsCommands"/>, scissor clips and reads of a capture surface that was never captured.
+/// built by <see cref="FadsCommands"/>, scissor clips, reads of a capture surface that was never captured, and the port's overlay mark followed by
+/// the next frame's list (v0.1.9).
 /// Every list must be within 1 level everywhere. Only the "state" group passes its blend state to compose; every
 /// other quad's state is decoded from the word by compose itself, independently of <see cref="DrawEffect.Decode"/>.
 /// Needs the local GPU and the Python oracle (.venv); never skips.
@@ -75,6 +76,17 @@ public sealed class ComposeDifferentialTests(ITestOutputHelper output)
         Assert.Equal(1, all.Max);                       // the comparison is live: 1-level rounding ties remain
         Assert.Contains("clip", byGroup.Keys);
         Assert.Contains("uncaptured surface", byGroup.Keys);
+        Assert.Equal(11, byGroup["overlays"].Cases);
+
+        // the two executors agree because both put the frame before the mark back, not because neither does: with the mark and without it the frames differ
+        foreach (string pair in new[] { "_FADS(0) p 0.9", "_FADS(0) p 0.5", "_FADS(2) p 0.9", "_FADS(2) p 0.5" })
+        {
+            int with = suite.Cases.FindIndex(k => k.Id == $"overlays: {pair} after the notice");
+            int without = suite.Cases.FindIndex(k => k.Id == $"no mark: {pair} after the notice");
+            Assert.True(with >= 0 && without >= 0, pair);
+            Assert.False(gpu.AsSpan(with * frame, frame).SequenceEqual(gpu.AsSpan(without * frame, frame)), $"GPU, {pair}: the mark changed nothing");
+            Assert.False(reference.AsSpan(with * frame, frame).SequenceEqual(reference.AsSpan(without * frame, frame)), $"compose, {pair}: the mark changed nothing");
+        }
     }
 
     [Fact]
@@ -261,6 +273,52 @@ public sealed class ComposeDifferentialTests(ITestOutputHelper output)
                     }
                 }
             }
+        }
+
+        if (want("overlays"))
+        {
+            // v0.1.9: the port's overlays after their mark (a quad in the notice's corner), then the next frame's list. A transition start reads the frame as it
+            // was at the mark; a list that draws a picture first, a clear in between, or a frame without the mark leave everything as it always was. The notice
+            // is a plain copy of the layer's texels (state 0): captured and blended again, a blended one adds a second rounding step to the comparison
+            DrawCmd notice = Quads.Textured(S, 160, 8, 248, 40, 160f / Size, 8f / Size, 248f / Size, 40f / Size, Quads.White(), 0, blendState: 0);
+            foreach (bool mark in new[] { true, false })
+            {
+                foreach (int kind in new[] { 0, 2 })
+                {
+                    foreach (float p in new[] { 0.9f, 0.5f })
+                    {
+                        var start = new DisplayList();
+                        start.Reset(0);
+                        FadsCommands.Begin(start, kind, Size, Size);
+                        var after = new DisplayList();
+                        after.Reset(0);
+                        after.Add(Quad(S, 0, Colours[2]));
+                        TransitionParams? tp = FadsCommands.Frame(after, kind, p, kind == 2 ? R : null, Size, Size);
+                        AlignedCase k = suite.NewCase($"{(mark ? "overlays" : "no mark")}: _FADS({kind}) p {p} after the notice", "overlays").Load("D");
+                        if (mark)
+                        {
+                            k.Add(Quads.OverlaysBegin());
+                        }
+
+                        k.Add(notice, stateOverride: true).Frame().AddAll(start).AddAll(after);
+                        if (tp is { } t)
+                        {
+                            k.Transition[R] = t;
+                        }
+                    }
+                }
+            }
+
+            suite.NewCase("overlays: the frame as shown keeps the notice", "overlays").Load("D").Add(Quads.OverlaysBegin()).Add(notice, stateOverride: true);
+            suite.NewCase("overlays: a list that draws a picture first gets nothing back", "overlays").Load("D").Add(Quads.OverlaysBegin()).Add(notice, stateOverride: true).Frame()
+                .Add(Quads.Textured(S, 0, 128, Size, Size, 0, 0.5f, 1, 1, Quads.White(), DrawEffect.Normal)).Add(Quads.Capture(0))
+                .Add(Quads.Textured(TextureRef.ForCapture(0), 0, 0, Size, Size, 0, 0, 1, 1, Quads.White(200), DrawEffect.Normal));
+            AlignedCase cleared = suite.NewCase("overlays: a clear forgets the kept frame", "overlays").Load("D").Add(Quads.OverlaysBegin()).Add(notice, stateOverride: true)
+                .Clear(0, 0, 0, 255);
+            var fads = new DisplayList();
+            fads.Reset(0);
+            FadsCommands.Begin(fads, 0, Size, Size);
+            cleared.AddAll(fads).Add(Quad(S, 0, Colours[1])).Add(Quads.Textured(TextureRef.ForCapture(0), 0, 0, Size, Size, 0, 0, 1, 1, Quads.White(128), DrawEffect.Normal));
         }
 
         return suite;

@@ -194,12 +194,83 @@ public sealed class RunningGameTests : IDisposable
     }
 
     [Fact]
-    public void TheWindowReadsTheProfileAgainWhenItComesToTheFront()
+    public async Task AProfileFolderThatCannotBeEnteredDoesNotStopTheLookAtItsFiles()
     {
-        string root = AppContext.BaseDirectory;
-        while (!File.Exists(Path.Combine(root, "src", "Tsuki.slnx"))) { root = Path.GetDirectoryName(root.TrimEnd(Path.DirectorySeparatorChar)) ?? throw new InvalidOperationException("no repository above the test"); }
-        string source = File.ReadAllText(Path.Combine(root, "src", "Tsuki.Launcher.Avalonia", "MainWindow.axaml.cs"));
-        Assert.Contains("Activated += (_, _) => _model.ReadProfileAgain(onlyIfChanged: true);", source, StringComparison.Ordinal);
+        // a profile folder left with another owner or without its permissions (a run with sudo and a tight umask): on macOS and Linux even the question when
+        // settings.ini was written fails there, and it is asked each time the window comes to the front. The files then count as not written, and PLAY is said
+        if (OperatingSystem.IsWindows()) { Assert.Skip("a folder nobody may enter is a Unix permission"); }
+        string install = Path.Combine(_root, "closed");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(_paths.DataDirectory);
+        File.WriteAllText(_paths.SettingsFile, "display_mode=fullscreen\n");
+        UnixLauncherModel model = Model(install, new Uri("http://127.0.0.1:9/"), linux: true);
+        UnixUpdateTestKit.Chmod(_paths.DataDirectory, UnixFileMode.None);
+        try
+        {
+            if (File.Exists(_paths.SettingsFile)) { Assert.Skip("this account ignores folder permissions (root)"); }
+            var raised = new List<string?>();
+            model.PropertyChanged += (_, e) => { lock (raised) { raised.Add(e.PropertyName); } };
+            model.ReadProfileAgain(onlyIfChanged: true);
+            lock (raised) { Assert.Contains(nameof(model.PlayLabel), raised); }
+            // the look at the page's files that coming to the front starts on a worker ends before the folder is opened again
+            await model.ReadAchievementsAgainAsync(onlyIfChanged: true);
+        }
+        finally
+        {
+            UnixUpdateTestKit.Chmod(_paths.DataDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
+    public async Task TheWindowReadsTheProfileAgainWhenItComesToTheFront()
+    {
+        string install = Path.Combine(_root, "front-window");
+        Directory.CreateDirectory(install);
+        Directory.CreateDirectory(_paths.DataDirectory);
+        File.WriteAllText(_paths.SettingsFile, "display_mode=fullscreen\n");
+        UnixLauncherModel model = Model(install, new Uri("http://127.0.0.1:9/"), linux: true);
+        await LauncherHeadlessTests.Run(() =>
+        {
+            // a window whose timer never looks: only coming to the front reads the profile again
+            MainWindow window = LauncherHeadlessTests.Show(model, TimeSpan.FromHours(1));
+            Assert.True(model.Fullscreen);
+            File.WriteAllText(_paths.SettingsFile, "display_mode=windowed\n");
+            File.SetLastWriteTimeUtc(_paths.SettingsFile, DateTime.UtcNow.AddMinutes(1));   // a later stamp even on a coarse file clock
+            window.Activate();
+            LauncherHeadlessTests.Pump(window);
+            Assert.False(model.Fullscreen);
+            window.Close();
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task AnErrorWhileTheWindowComesToTheFrontIsReportedAndDoesNotLeaveTheHandler()
+    {
+        // on X11 and macOS the system's own event loop calls the handler: an exception that leaves it there may end the launcher instead of reaching the crash
+        // hook of the window's jobs. No crash hook is installed here, so an exception that left the handler would end this test
+        string install = Path.Combine(_root, "front-error");
+        Directory.CreateDirectory(install);
+        UnixLauncherModel model = Model(install, new Uri("http://127.0.0.1:9/"), linux: true);
+        await LauncherHeadlessTests.Run(() =>
+        {
+            MainWindow window = LauncherHeadlessTests.Show(model, TimeSpan.FromHours(1));
+            bool armed = true;
+            model.PropertyChanged += (_, e) =>
+            {
+                if (!armed || e.PropertyName != nameof(model.PlayLabel)) { return; }
+                armed = false;
+                throw new InvalidOperationException("deliberate error while the window comes to the front");
+            };
+            window.Activate();
+            LauncherHeadlessTests.Pump(window);
+            Assert.False(armed, "coming to the front did not say the play state");
+            string log = Path.Combine(_paths.DataDirectory, UnixLauncherCrash.FileName);
+            Assert.Contains("deliberate error while the window comes to the front", File.ReadAllText(log), StringComparison.Ordinal);
+            Assert.Equal("The launcher hit an error: deliberate error while the window comes to the front. Details are in " + log + ".", window.ToastText.Text);
+            window.Close();
+            return Task.CompletedTask;
+        });
     }
 
     [Fact]

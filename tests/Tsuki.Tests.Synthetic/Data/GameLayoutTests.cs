@@ -270,6 +270,139 @@ public sealed class GameLayoutTests : IDisposable
         }
     }
 
+    // A junction whose target is then removed (a junction to an external drive that is unplugged): the folder is there, and listing it throws. Windows makes a
+    // junction without any privilege; null where it could not be made.
+    private string? JunctionToNowhere(params string[] parts)
+    {
+        string link = Path.Combine([_root, .. parts]);
+        string target = Dir("targets", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+        using System.Diagnostics.Process? p = System.Diagnostics.Process.Start(
+            new System.Diagnostics.ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true });
+        if (p is null)
+        {
+            return null;
+        }
+
+        p.StandardOutput.ReadToEnd();
+        p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        if (p.ExitCode != 0 || !Directory.Exists(link))
+        {
+            return null;
+        }
+
+        Directory.Delete(target);
+        return link;
+    }
+
+    [Fact]
+    public void AFolderThatIsThereAndCannotBeListedHoldsNoGame()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;     // the Linux case (a folder without the permission to read it) is the next test
+        }
+
+        // The remembered or chosen game folder is a junction whose target is gone: Directory.Exists says yes and the listing throws. The resolver threw with it:
+        // the game ended with an error instead of asking for the folder, and the launchers' folder check failed where it promises not to.
+        string? gone = JunctionToNowhere("unplugged");
+        string? inside = gone is null ? null : JunctionToNowhere("above", "CUSA47999");
+        try
+        {
+            if (gone is null || inside is null)
+            {
+                Assert.Skip("a junction could not be made in the temporary folder");
+                return;
+            }
+
+            Assert.True(Directory.Exists(gone));
+            Assert.ThrowsAny<IOException>(() => Directory.GetDirectories(gone));
+
+            GameLayout layout = GameLayoutResolver.Resolve(gone);
+            Assert.Equal(GameLayoutKind.NoGame, layout.Kind);
+            Assert.Equal(gone, layout.Chosen);
+            Assert.False(layout.IsGame);
+            Assert.Null(layout.PrimaryFolder);
+            Assert.Equal($"{gone}: no game inside", layout.Describe());
+            Assert.Equal(GameLayoutKind.NoGame, GameLayoutResolver.Resolve(gone + Path.DirectorySeparatorChar).Kind);
+            Assert.Equal(GameLayoutKind.NoGame, GameLayoutResolver.Resolve("\"" + gone + "\"").Kind);
+
+            // one level down (the folder above such a link), where the listing was already guarded: no game either
+            Assert.Equal(GameLayoutKind.NoGame, GameLayoutResolver.Resolve(Path.Combine(_root, "above")).Kind);
+
+            // and a game beside such a link is found as before, from its own folder and from the folder above
+            string game = Game(Path.Combine("above", "CUSA47999-real"));
+            Assert.Equal(game, GameLayoutResolver.Resolve(game).BaseFolder);
+            GameLayout above = GameLayoutResolver.Resolve(Path.Combine(_root, "above"));
+            Assert.Equal(GameLayoutKind.Game, above.Kind);
+            Assert.Equal(game, above.BaseFolder);
+        }
+        finally
+        {
+            // the links themselves, as links
+            foreach (string? link in new[] { gone, inside })
+            {
+                if (link is not null && Directory.Exists(link))
+                {
+                    Directory.Delete(link, recursive: false);
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void AFolderWithoutThePermissionToListItHoldsNoGameAndWhatIsBesideAGameInItIsNotSeen()
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return;     // directory permissions as Linux has them; the Windows case (a junction whose target is gone) is the test above
+        }
+
+        string locked = Dir("locked");
+        string game = Game(Path.Combine("locked", "CUSA47999"));
+        string patch = Patch(Path.Combine("locked", "CUSA47999-patch"));
+        Assert.Equal(GameLayoutKind.GameWithUpdate, GameLayoutResolver.Resolve(locked).Kind);
+        UnixFileMode mode = File.GetUnixFileMode(locked);
+        try
+        {
+            // no permission at all (a game folder extracted as another user): the folder is there, and listing it throws
+            File.SetUnixFileMode(locked, UnixFileMode.None);
+            try
+            {
+                // an administrator's account lists a folder whatever its permissions say: then there is nothing to refuse
+                Directory.GetDirectories(locked);
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+
+            GameLayout layout = GameLayoutResolver.Resolve(locked);
+            Assert.Equal(GameLayoutKind.NoGame, layout.Kind);
+            Assert.Equal(locked, layout.Chosen);
+            Assert.False(layout.IsGame);
+
+            // search permission only: what is inside is reached by its name, and nothing beside it can be listed. The game is a game without the update it
+            // cannot see; the update alone has no base it can see
+            File.SetUnixFileMode(locked, UnixFileMode.UserExecute);
+            GameLayout alone = GameLayoutResolver.Resolve(game);
+            Assert.Equal(GameLayoutKind.Game, alone.Kind);
+            Assert.Equal(game, alone.BaseFolder);
+            Assert.Null(alone.PatchFolder);
+            Assert.Null(GameLayoutResolver.FindPatchBeside(game));
+            Assert.Equal(GameLayoutKind.UpdateOnly, GameLayoutResolver.Resolve(patch).Kind);
+            Assert.Null(GameLayoutResolver.FindBaseBeside(patch));
+            Assert.Equal(GameLayoutKind.NoGame, GameLayoutResolver.Resolve(locked).Kind);
+        }
+        finally
+        {
+            File.SetUnixFileMode(locked, mode);
+        }
+
+        Assert.Equal(GameLayoutKind.GameWithUpdate, GameLayoutResolver.Resolve(game).Kind);
+    }
+
     [Fact(Skip = "Linux linked assets.", SkipUnless = nameof(IsLinux))]
     public void CaseVariantLinkedAssetsOutsideTheChosenFolderStillPairAndRead()
     {

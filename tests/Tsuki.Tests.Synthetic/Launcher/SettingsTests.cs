@@ -40,7 +40,9 @@ public sealed class SettingsTests : IDisposable
         ScreenshotNotice: false,
         UpdateCheck: false,
         TextWebSocketOrigin: "https://reader.example",
-        RememberedFullscreen: true);
+        RememberedFullscreen: true,
+        TrophyNotice: false,
+        TrophySound: true);
 
     [Fact]
     public void EveryKeyRoundTripsThroughTheFile()
@@ -57,7 +59,7 @@ public sealed class SettingsTests : IDisposable
     {
         string text = AppSettings.Format(new AppSettingsData());
         Assert.Contains("prompts=auto", text, StringComparison.Ordinal);
-        foreach (string key in new[] { "fullscreen=", "display_mode=", "window=", "monitor=", "vsync=", "language=", "mute_in_background=", "copy_text=", "text_hooker=", "text_websocket=", "text_websocket_port=", "text_websocket_origin=", "screenshot_notice=", "update_check=" })
+        foreach (string key in new[] { "fullscreen=", "display_mode=", "window=", "monitor=", "vsync=", "language=", "mute_in_background=", "copy_text=", "text_hooker=", "text_websocket=", "text_websocket_port=", "text_websocket_origin=", "screenshot_notice=", "trophy_notice=", "trophy_sound=", "update_check=" })
         {
             Assert.DoesNotContain(key, text, StringComparison.Ordinal);
         }
@@ -125,13 +127,33 @@ public sealed class SettingsTests : IDisposable
     [InlineData("prompts=auto", null)]
     public void TheScreenshotNoticeKeyReadsOnAndOffAndIsWrittenWithItsComment(string line, bool? expected)
     {
-        // package K24: the key behind Config > System > Screenshot Notice; absent means on (PortSettings decides that)
+        // package K24: the key behind Config > System > Screenshot Notify; absent means on (PortSettings decides that)
         Assert.Equal(expected, AppSettings.Parse(line).ScreenshotNotice);
         string text = AppSettings.Format(new AppSettingsData(ScreenshotNotice: false));
         Assert.Contains("# screenshot_notice:", text, StringComparison.Ordinal);
         Assert.Contains("screenshot_notice=off\n", text, StringComparison.Ordinal);
         Assert.Equal(false, AppSettings.Parse(text).ScreenshotNotice);
         Assert.Contains("screenshot_notice=on\n", AppSettings.Format(new AppSettingsData(ScreenshotNotice: true)), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheFilesCommentsSayMessageAndNotifyNotNotice()
+    {
+        // v0.1.9, FIXES D10 Q-1: a player who opens settings.ini (the guide's Appendix A points there) reads the guide's words: "message" for what appears and
+        // "Notify" for the Config rows. Only the keys keep "notice" (screenshot_notice, trophy_notice: renaming them would lose every player's choice).
+        string text = AppSettings.Format(Everything() with { ArcueidIcon = true });
+        string[] comments = [.. text.Split('\n').Where(line => line.StartsWith('#'))];
+        Assert.Equal(19, comments.Length);                                                        // the heading and one line per key: all of them are set
+        foreach (string line in comments)
+        {
+            string words = line.Replace("screenshot_notice", "key", StringComparison.Ordinal).Replace("trophy_notice", "key", StringComparison.Ordinal);
+            Assert.DoesNotContain("notice", words, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains("# screenshot_notice: on (the default) shows the short \"Screenshot saved\" message after F12; off saves the picture silently (Config > System > Screenshot Notify)\n", text, StringComparison.Ordinal);
+        Assert.Contains("# trophy_notice: on shows a message in the game when an achievement is earned;", text, StringComparison.Ordinal);
+        Assert.Contains("(Config > System > Achievement Notify, or the launcher's Achievements page)\n", text, StringComparison.Ordinal);
+        Assert.Contains("# trophy_sound: on plays a short chime as an achievement's message appears, only while trophy_notice is on;", text, StringComparison.Ordinal);
     }
 
     [Theory]

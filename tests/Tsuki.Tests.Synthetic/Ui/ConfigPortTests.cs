@@ -74,11 +74,14 @@ public sealed class ConfigPortTests
     {
         (_, _, ConfigScreen screen) = Open();
         Assert.True(screen.HasPortRows);
-        // package K23 adds the Text Hooker Output and Text WebSocket rows between the clipboard row and the slider; package K24 the Screenshot Notice row under the window rows
-        Assert.Equal([PortRow.DisplayMode, PortRow.WindowSize, PortRow.ScreenshotNotice, PortRow.CopyText, PortRow.TextHooker, PortRow.TextWebSocket, PortRow.Opacity], screen.SystemBandRows());
+        // package K23 adds the Text Hooker Output and Text WebSocket rows between the clipboard row and the slider; package K24 the Screenshot Notify row under the window
+        // rows; v0.1.9 the Achievement Notify row right under that one and the Achievement Sound row under it
+        Assert.Equal([PortRow.DisplayMode, PortRow.WindowSize, PortRow.ScreenshotNotice, PortRow.TrophyNotice, PortRow.TrophySound, PortRow.CopyText, PortRow.TextHooker, PortRow.TextWebSocket, PortRow.Opacity], screen.SystemBandRows());
         List<(Ctl Ctl, float X, float Y)> layout = screen.Layout;
         (Ctl _, float sx, float sy) = layout.First(t => t.Ctl == new Ctl(CtlKind.WindowSize, 0));
         (Ctl _, float nx, float ny) = layout.First(t => t.Ctl == new Ctl(CtlKind.ScreenshotNotice, 0));
+        (Ctl _, float tx, float ty) = layout.First(t => t.Ctl == new Ctl(CtlKind.TrophyNotice, 0));
+        (Ctl _, float ax, float ay) = layout.First(t => t.Ctl == new Ctl(CtlKind.TrophySound, 0));
         (Ctl _, float cx, float cy) = layout.First(t => t.Ctl == new Ctl(CtlKind.CopyText, 0));
         (Ctl _, float onX, float onY) = layout.First(t => t.Ctl == new Ctl(CtlKind.CopyText, 1));
         (Ctl _, float hx, float hy) = layout.First(t => t.Ctl == new Ctl(CtlKind.TextHooker, 0));
@@ -89,16 +92,22 @@ public sealed class ConfigPortTests
         Assert.Equal(sx, hx);
         Assert.Equal(sx, wx);
         Assert.Equal(sx, ox);
+        Assert.Equal(sx, tx);
+        Assert.Equal(sx, ax);
         Assert.Equal(sy + 56f, ny);
-        Assert.Equal(ny + 56f, cy);
+        Assert.Equal(ny + 56f, ty);
+        Assert.Equal(ty + 56f, ay);
+        Assert.Equal(ay + 56f, cy);
         Assert.Equal(cy, onY);
         Assert.True(onX > cx);
         Assert.Equal(cy + 56f, hy);
         Assert.Equal(hy + 56f, wy);
         Assert.Equal(wy + 56f, oy);
-        Assert.Equal(750f + ConfigScreen.BandFor(7), screen.ScrollMaximum);
+        Assert.Equal(750f + ConfigScreen.BandFor(9), screen.ScrollMaximum);
         IReadOnlyList<IReadOnlyList<Ctl>> grid = screen.GridRows();
-        Assert.Equal([new Ctl(CtlKind.ScreenshotNotice, 0), new Ctl(CtlKind.ScreenshotNotice, 1)], grid[^5]);
+        Assert.Equal([new Ctl(CtlKind.ScreenshotNotice, 0), new Ctl(CtlKind.ScreenshotNotice, 1)], grid[^7]);
+        Assert.Equal([new Ctl(CtlKind.TrophyNotice, 0), new Ctl(CtlKind.TrophyNotice, 1)], grid[^6]);
+        Assert.Equal([new Ctl(CtlKind.TrophySound, 0), new Ctl(CtlKind.TrophySound, 1)], grid[^5]);
         Assert.Equal([new Ctl(CtlKind.CopyText, 0), new Ctl(CtlKind.CopyText, 1)], grid[^4]);
         Assert.Equal([new Ctl(CtlKind.TextHooker, 0), new Ctl(CtlKind.TextHooker, 1)], grid[^3]);
         Assert.Equal([new Ctl(CtlKind.TextWebSocket, 0), new Ctl(CtlKind.TextWebSocket, 1)], grid[^2]);
@@ -110,7 +119,7 @@ public sealed class ConfigPortTests
         (_, _, ConfigScreen none) = Open(x => x.Port = null);
         Assert.False(none.HasPortRows);
         Assert.Equal([PortRow.DisplayMode, PortRow.WindowSize, PortRow.Opacity], none.SystemBandRows());
-        Assert.DoesNotContain(none.Layout, t => t.Ctl.Kind is CtlKind.CopyText or CtlKind.ScreenshotNotice);
+        Assert.DoesNotContain(none.Layout, t => t.Ctl.Kind is CtlKind.CopyText or CtlKind.ScreenshotNotice or CtlKind.TrophyNotice or CtlKind.TrophySound);
         Assert.Contains(none.Layout, t => t.Ctl.Kind == CtlKind.Opacity);
         Assert.Equal(750f + ConfigScreen.BandFor(3), none.ScrollMaximum);
 
@@ -151,7 +160,7 @@ public sealed class ConfigPortTests
     }
 
     [Fact]
-    public void TheScreenshotNoticePillsStartOnSwitchThePortSettingAndSitBetweenTheWindowSizeAndClipboardRows()
+    public void TheScreenshotNoticePillsStartOnSwitchThePortSettingAndSitBetweenTheWindowSizeAndAchievementNoticeRows()
     {
         // package K24: On by default; Off saves screenshots without the toast
         (UiRoot root, PreviewServices s, ConfigScreen screen) = Open();
@@ -170,8 +179,8 @@ public sealed class ConfigPortTests
         Assert.Equal(CtlKind.WindowSize, At(screen, screen.Cursor).Kind);
         UiTestKit.Press(root, PadButtons.Down);
         Assert.Equal(new Ctl(CtlKind.ScreenshotNotice, 0), At(screen, screen.Cursor));
-        UiTestKit.Press(root, PadButtons.Down);                                     // down from it: the clipboard row, the same column
-        Assert.Equal(new Ctl(CtlKind.CopyText, 0), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Down);                                     // down from it: the achievement notice row (v0.1.9), the same column
+        Assert.Equal(new Ctl(CtlKind.TrophyNotice, 0), At(screen, screen.Cursor));
 
         UiTestKit.Press(root, PadButtons.Up);
         UiTestKit.Press(root, PadButtons.Right);
@@ -185,6 +194,116 @@ public sealed class ConfigPortTests
         (Ctl _, float nx, float ny) = screen.Layout.First(t => t.Ctl == new Ctl(CtlKind.ScreenshotNotice, 1));
         UiTestKit.Point(root, nx + 20f, ny + 10f, click: true);
         Assert.True(s.Port.ScreenshotNotice);
+    }
+
+    [Fact]
+    public void TheAchievementNoticePillsStartOffSwitchThePortSettingAndSitBetweenTheScreenshotNoticeAndSoundRows()
+    {
+        // v0.1.9: Off by default (the owner's choice: the player turns it on); Off earns achievements without the notice
+        (UiRoot root, PreviewServices s, ConfigScreen screen) = Open();
+        Assert.False(s.Port!.TrophyNotice);
+        Assert.True(screen.IsOn(new Ctl(CtlKind.TrophyNotice, 0)));
+        Assert.False(screen.IsOn(new Ctl(CtlKind.TrophyNotice, 1)));
+        Assert.True(ConfigScreen.IsSwitch(CtlKind.TrophyNotice));
+        Assert.Equal(CtlKind.TrophyNotice, ConfigScreen.SwitchKind(PortRow.TrophyNotice));
+
+        Go(root, screen, new Ctl(CtlKind.TrophyNotice, 1));
+        UiTestKit.Press(root, PadButtons.Decide);
+        Assert.True(s.Port.TrophyNotice);
+        Assert.True(s.Port.ScreenshotNotice);                                       // the row above is another switch
+        Assert.False(s.Port.TrophySound);                                           // and so is the row below
+        Assert.Contains("achievement notice on", s.Calls);
+        Assert.True(screen.IsOn(new Ctl(CtlKind.TrophyNotice, 1)));
+        Assert.False(screen.IsOn(new Ctl(CtlKind.TrophyNotice, 0)));
+        Assert.DoesNotContain("commit", s.Calls);                                  // the port saves the switch itself; the config block did not change
+
+        UiTestKit.Press(root, PadButtons.Up);                                       // up from the row: the Screenshot Notify row
+        Assert.Equal(new Ctl(CtlKind.ScreenshotNotice, 1), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Down);
+        UiTestKit.Press(root, PadButtons.Down);                                     // down from it: the sound row
+        Assert.Equal(new Ctl(CtlKind.TrophySound, 1), At(screen, screen.Cursor));
+
+        UiTestKit.Press(root, PadButtons.Up);
+        UiTestKit.Press(root, PadButtons.Left);
+        UiTestKit.Press(root, PadButtons.Decide);
+        Assert.False(s.Port.TrophyNotice);
+        Assert.Contains("achievement notice off", s.Calls);
+
+        // a change from outside the screen (the launcher's switch writes the same key) shows in the row, and the pointer switches it too
+        s.Port.TrophyNotice = true;
+        Assert.True(screen.IsOn(new Ctl(CtlKind.TrophyNotice, 1)));
+        (Ctl _, float nx, float ny) = screen.Layout.First(t => t.Ctl == new Ctl(CtlKind.TrophyNotice, 0));
+        RectF pill = screen.HitRect(new Ctl(CtlKind.TrophyNotice, 0), nx, ny);
+        Assert.Equal((UiPrompts.SwitchPillWidth, UiPrompts.PillHeight), (pill.W, pill.H));
+        UiTestKit.Point(root, nx + 20f, ny + 10f, click: true);
+        Assert.False(s.Port.TrophyNotice);
+
+        // the owner's word (FIXES D9): "Notify", not "Notice", in English; the other languages keep theirs (通知 / 提示 already mean notify)
+        Assert.Equal(("Achievement^Notify", "実績の通知", "成就提示", "成就通知"), (UiPrompts.TrophyNoticeHeading(Language.En), UiPrompts.TrophyNoticeHeading(Language.Ja), UiPrompts.TrophyNoticeHeading(Language.Zc), UiPrompts.TrophyNoticeHeading(Language.Zt)));
+    }
+
+    [Fact]
+    public void TheAchievementSoundPillsStartOffSwitchThePortSettingAndAreDimmedWhileTheNoticeIsOff()
+    {
+        // v0.1.9: the chime as a notice comes in, Off by default, right under the Achievement Notify row and above the clipboard row
+        (UiRoot root, PreviewServices s, ConfigScreen screen) = Open();
+        Assert.False(s.Port!.TrophySound);
+        Assert.True(screen.IsOn(new Ctl(CtlKind.TrophySound, 0)));
+        Assert.False(screen.IsOn(new Ctl(CtlKind.TrophySound, 1)));
+        Assert.True(ConfigScreen.IsSwitch(CtlKind.TrophySound));
+        Assert.Equal(CtlKind.TrophySound, ConfigScreen.SwitchKind(PortRow.TrophySound));
+        (Ctl _, float x, float y) = screen.Layout.First(t => t.Ctl == new Ctl(CtlKind.TrophySound, 1));
+        Assert.Equal((UiPrompts.SwitchPillWidth, UiPrompts.PillHeight), (screen.HitRect(new Ctl(CtlKind.TrophySound, 1), x, y).W, screen.HitRect(new Ctl(CtlKind.TrophySound, 1), x, y).H));
+
+        // it can be set while the notice is off: it then sounds once the notice is on as well
+        Go(root, screen, new Ctl(CtlKind.TrophySound, 1));
+        UiTestKit.Press(root, PadButtons.Decide);
+        Assert.True(s.Port.TrophySound);
+        Assert.False(s.Port.TrophyNotice);                                          // the notice's row is another switch
+        Assert.Contains("achievement sound on", s.Calls);
+        Assert.True(screen.IsOn(new Ctl(CtlKind.TrophySound, 1)));
+        Assert.DoesNotContain("commit", s.Calls);
+
+        UiTestKit.Press(root, PadButtons.Up);                                       // up: the notice's row; down twice from it: the clipboard row
+        Assert.Equal(new Ctl(CtlKind.TrophyNotice, 1), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Down);
+        UiTestKit.Press(root, PadButtons.Down);
+        Assert.Equal(new Ctl(CtlKind.CopyText, 1), At(screen, screen.Cursor));
+        UiTestKit.Press(root, PadButtons.Up);
+        UiTestKit.Press(root, PadButtons.Left);
+        UiTestKit.Press(root, PadButtons.Decide);
+        Assert.False(s.Port.TrophySound);
+        Assert.Contains("achievement sound off", s.Calls);
+
+        // the pointer switches it too, and a change from outside the screen (the launcher's switch writes the same key) shows in the row
+        (Ctl _, float px, float py) = screen.Layout.First(t => t.Ctl == new Ctl(CtlKind.TrophySound, 1));
+        UiTestKit.Point(root, px + 20f, py + 10f, click: true);
+        Assert.True(s.Port.TrophySound);
+        s.Port.TrophySound = false;
+        Assert.True(screen.IsOn(new Ctl(CtlKind.TrophySound, 0)));
+
+        // while the notice is off the row is drawn dimmed, heading and pills (the chime would not sound), as the size row is in fullscreen; with the notice on it is not
+        UiTestKit.Point(root, 100f, 100f);                                          // the pointer away from the pills: no hover
+        Assert.True(screen.SoundRowDimmed);
+        float dimmed = HeadingAlpha(root, screen);
+        s.Port.TrophyNotice = true;
+        Assert.False(screen.SoundRowDimmed);
+        Assert.Equal(1f, HeadingAlpha(root, screen));
+        Assert.True(dimmed is > 0f and < 0.6f, $"the heading of the sound row is drawn at {dimmed} while the notice is off");
+
+        Assert.Equal(("Achievement^Sound", "実績の通知音", "成就提示音", "成就通知音"), (UiPrompts.TrophySoundHeading(Language.En), UiPrompts.TrophySoundHeading(Language.Ja), UiPrompts.TrophySoundHeading(Language.Zc), UiPrompts.TrophySoundHeading(Language.Zt)));
+    }
+
+    // the alpha of the glyphs the frame draws left of the pills on the sound row (its heading; the synthetic pages draw English)
+    private static float HeadingAlpha(UiRoot root, ConfigScreen screen)
+    {
+        screen.ScrollNow(screen.ScrollMaximum);
+        UiTestKit.Run(root, 2);
+        (Ctl _, float x, float y) = screen.Layout.First(t => t.Ctl == new Ctl(CtlKind.TrophySound, 0));
+        // the row's two lines are centred on the pills' middle (y + 19), the lines of the rows above and below are 56 px away
+        DrawCmd[] heading = [.. UiTestKit.Draw(root).Commands.ToArray().Where(c => c.Texture.Kind == TextureKind.GlyphPage && c.V3.X < x && (c.V0.Y + c.V3.Y) / 2f is var cy && cy >= y - 8f && cy <= y + 46f)];
+        Assert.NotEmpty(heading);
+        return heading.Max(c => (c.V0.Rgba >> 24) / 255f);
     }
 
     [Fact]
@@ -392,7 +511,8 @@ public sealed class ConfigPortTests
             Assert.NotEqual(UiPrompts.SwitchLabel(lang, 0), UiPrompts.SwitchLabel(lang, 1));
         }
 
-        Assert.Equal(("Screenshot Notice", "スクリーンショット^通知", "截图提示", "螢幕截圖通知"), (UiPrompts.ScreenshotNoticeHeading(Language.En), UiPrompts.ScreenshotNoticeHeading(Language.Ja), UiPrompts.ScreenshotNoticeHeading(Language.Zc), UiPrompts.ScreenshotNoticeHeading(Language.Zt)));
+        // v0.1.9 (FIXES D9): "Screenshot Notify", as the achievement row under it says "Notify" (the owner's word); the other languages keep theirs
+        Assert.Equal(("Screenshot Notify", "スクリーンショット^通知", "截图提示", "螢幕截圖通知"), (UiPrompts.ScreenshotNoticeHeading(Language.En), UiPrompts.ScreenshotNoticeHeading(Language.Ja), UiPrompts.ScreenshotNoticeHeading(Language.Zc), UiPrompts.ScreenshotNoticeHeading(Language.Zt)));
         Assert.Equal(("Text Hooker^Output", "テキストフッカー出力", "文本钩子输出", "文字鉤子輸出"), (UiPrompts.TextHookerHeading(Language.En), UiPrompts.TextHookerHeading(Language.Ja), UiPrompts.TextHookerHeading(Language.Zc), UiPrompts.TextHookerHeading(Language.Zt)));
         Assert.Equal(("Text WebSocket", "テキスト WebSocket"), (UiPrompts.WebSocketHeading(Language.En), UiPrompts.WebSocketHeading(Language.Ja)));
 

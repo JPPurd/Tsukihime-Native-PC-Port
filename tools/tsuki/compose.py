@@ -881,13 +881,31 @@ def execute_list(ops: Sequence[dict], textures: Dict[str, np.ndarray], width: in
       ``state`` defaults to the word's blend state (5.1); ``transition`` = the texture's
       transition parameters (2.2, 7.4), which select PS #0 for mode 0; ``clip`` = [x, y, w, h]
       (optional) = the scissor rectangle in target pixels: only pixels inside it are drawn;
-    * ``{"op": "capture", "surface": n}``: copy the target into capture surface n (type 6).
+    * ``{"op": "capture", "surface": n}``: copy the target into capture surface n (type 6);
+    * ``{"op": "overlays"}``: the port's overlays (the toast, the achievement notice; v0.1.9, no PS4
+      record) begin here: the target as it is now is kept aside (the first mark of a list only);
+    * ``{"op": "frame"}``: the next display list begins (the ops are several frames' lists).  When
+      the list before it kept the target at its overlays and this list reads the previous frame at
+      its head (a capture before any textured quad, clear, load or mark; fills do not end the head:
+      the transition start's alpha fill), the kept target is put back first.  The kept target is
+      forgotten at every frame, clear and load.  This is ``DisplayListExecutor``'s rule.
 
     Texture names ``"capture:n"`` read capture surface n (0..15).  A quad whose vertex alpha is 0
     is skipped (surface flag k = 4, 0xF0AE0, section 3)."""
     rt = (np.zeros((height, width, 4), np.uint8) if target is None
           else np.array(target, dtype=np.uint8, copy=True))
     caps: Dict[int, np.ndarray] = {} if captures is None else captures
+    clean: Optional[np.ndarray] = None             # the target where this list's overlays began
+
+    def reads_previous_frame(start: int) -> bool:
+        for later in ops[start:]:
+            k = later["op"]
+            if k == "capture":
+                return True
+            if k == "quad" and later.get("tex") is None:
+                continue                           # a fill (the alpha fill of effect 56)
+            return False                           # a picture, a clear, a load, a mark or the next frame
+        return False
 
     def tex(name: str) -> np.ndarray:
         if name.startswith("capture:"):
@@ -899,14 +917,23 @@ def execute_list(ops: Sequence[dict], textures: Dict[str, np.ndarray], width: in
             return caps[n]
         return textures[name]
 
-    for op in ops:
+    for index, op in enumerate(ops):
         kind = op["op"]
         if kind == "clear":
             rt[...] = np.asarray(op["rgba"], np.uint8)
+            clean = None
         elif kind == "load":
             rt[...] = tex(op["tex"])
+            clean = None
         elif kind == "capture":
             caps[int(op["surface"])] = rt.copy()
+        elif kind == "overlays":
+            if clean is None:
+                clean = rt.copy()
+        elif kind == "frame":
+            if clean is not None and reads_previous_frame(index + 1):
+                rt[...] = clean
+            clean = None
         elif kind == "quad":
             if int(op["color"][3]) <= 0:
                 continue                                   # culled (0xF0AE0)

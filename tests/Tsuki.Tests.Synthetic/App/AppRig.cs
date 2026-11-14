@@ -29,7 +29,10 @@ internal sealed class AppRig
     /// <param name="audio">The audio player, or none.</param>
     /// <param name="copies">How many scripts hold <paramref name="script"/> (scenes 100, 101, ...); 11 or more give scene 110, which a gallery replay starts when the
     /// rig has no ARCHIVE scene (3000 falls back to START_SCRIPT, GameHost.EnterScene), so a replay can run (package K39).</param>
-    public AppRig(string script = ThreePages, string? savePath = null, SaveStore? store = null, AudioCommandPlayer? audio = null, int copies = 1)
+    /// <param name="trophyScenes">The trophy scene table the services read at start (v0.1.9: index i is the flowchart node of trophy i + 1); none: an empty table.</param>
+    /// <param name="now">The clock of the services (slot dates, the time an achievement was earned); none: the system's.</param>
+    /// <param name="milliseconds">The clock that spaces the retries of an achievements file that could not be written; none: the system's.</param>
+    public AppRig(string script = ThreePages, string? savePath = null, SaveStore? store = null, AudioCommandPlayer? audio = null, int copies = 1, IReadOnlyList<int>? trophyScenes = null, Func<DateTime>? now = null, Func<long>? milliseconds = null)
     {
         Rig = new GameRig().Line(2, "alpha line").Line(3, "beta line").Line(4, "gamma line").Line(5, "delta line").Line(6, "epsilon line")
             .Line(43960, "1. ").Line(43961, "2. ").Line(43962, "3. ");
@@ -39,6 +42,12 @@ internal sealed class AppRig
         }
 
         Rig.Build();
+        if (trophyScenes is not null)
+        {
+            // the services read the table once, when they are created; the flow tables of the hosts built later are new objects
+            Rig.Flow.TrophySceneList.AddRange(trophyScenes);
+        }
+
         Store = store ?? NewStore();
         Services = new AppServices(new AppServicesParts
         {
@@ -46,6 +55,8 @@ internal sealed class AppRig
             Store = Store,
             SavePath = savePath,
             Audio = audio,
+            Now = now,
+            Milliseconds = milliseconds,
             InitialLanguage = Language.En,
             HostFactory = (language, profile) => Rig.Build(new GameOptions { Language = language, RecordUnknownCommands = true }, profile),
         });

@@ -257,6 +257,60 @@ public sealed class GalleryScreenTests
         Assert.Equal(2f, zoom);
     }
 
+    [Theory]
+    [InlineData(Language.Ja)]
+    [InlineData(Language.En)]
+    [InlineData(Language.Zc)]
+    [InlineData(Language.Zt)]
+    public void ALanguageStripPictureIsDrawnFromItsLanguagesStripAtTheBandStrideAndItsThumbnailFromItsLanguagesFrame(Language language)
+    {
+        // IMG0005 stacks one strip per language (FakeGalleryTables.CgLanguageStrips). Its table rectangle is 1920 x 1080, so its strips are stored 1270 rows apart
+        // (1080 rounded up to whole 254-row tiles, docs/formats/images.md 8.1), not 1080; its thumbnail sheet stacks a 231 x 130 frame per language. The kit serves
+        // every picture and sheet as one 4000 x 4000 tile, so a quad's V times 4000 is the row it is cut from. What the grid and the viewer draw is checked, not
+        // the helpers they call
+        const float Side = 4000f;
+        int l = (int)language;
+        PreviewServices s = GalleryKit.Services(language);
+        s.Progress.Pictures.Add(1);
+        s.Progress.Pictures.Add(5);
+        s.SetSceneBit(2, true);                                                       // the started scene that opens IMG0005's category
+        UiRoot root = GalleryKit.Root(s);
+        root.Push(new GalleryScreen());
+        Run(root, 40);
+        Press(root, PadButtons.Right);
+        Run(root, 40);
+
+        // the grid: IMG0001's thumbnail (sheet 0) is the first frame in every language, IMG0005's (sheet 4) is the frame of the player's language
+        DrawCmd[] grid = UiTestKit.Draw(root).Commands.ToArray();
+        DrawCmd Thumb(int sheet) => Assert.Single(grid, c => c.Texture == TextureRef.ForUiTile(UiSet.GalleryPartsCgTh, language, sheet, 0));
+        DrawCmd plain = Thumb(0);
+        Assert.Equal(0f, plain.V0.V * Side, 2);
+        Assert.Equal(130f, plain.V2.V * Side, 2);
+        DrawCmd strip = Thumb(4);
+        Assert.Equal(130f * l, strip.V0.V * Side, 2);
+        Assert.Equal((130f * l) + 130f, strip.V2.V * Side, 2);
+        Assert.Equal((0f, 231f), (strip.V0.U * Side, strip.V1.U * Side));
+
+        // the viewer on IMG0005: the table's 1080 rows of the language's strip, which starts 1270 x language rows down (the tile ends at row 4000)
+        Press(root, PadButtons.Right);
+        Press(root, PadButtons.Decide);
+        var viewer = Assert.IsType<GalleryCgViewer>(root.Top);
+        Assert.Equal(2, viewer.Group);
+        Run(root, 40);
+        DrawCmd Shown() => Assert.Single(UiTestKit.Draw(root).Commands.ToArray(), c => c.Texture == TextureRef.ForPictureTile(4, 1, 0));
+        DrawCmd shown = Shown();
+        Assert.Equal(1270f * l, shown.V0.V * Side, 1);
+        Assert.Equal(MathF.Min((1270f * l) + 1080f, Side), shown.V2.V * Side, 1);
+
+        // the next picture, IMG0001, is one strip: its rows from the top in every language
+        Press(root, PadButtons.Right);
+        Run(root, 40);
+        Assert.Equal(0, viewer.Group);
+        shown = Shown();
+        Assert.Equal(0f, shown.V0.V * Side, 1);
+        Assert.Equal(1080f, shown.V2.V * Side, 1);
+    }
+
     // ---- music ------------------------------------------------------------------------------------------------------------------------------------
 
     private static (UiRoot Root, PreviewServices S, GalleryScreen Gallery, GalleryMusicPanel Music) OpenMusic()

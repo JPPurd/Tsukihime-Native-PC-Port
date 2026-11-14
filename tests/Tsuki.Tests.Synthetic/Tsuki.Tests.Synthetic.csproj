@@ -26,5 +26,11 @@
       the one settings reader / writer both programs use comes from the Tsuki.App reference above.
     -->
     <Compile Include="..\..\src\Tsuki.Launcher\Core\*.cs" Exclude="..\..\src\Tsuki.Launcher\Core\ReleaseCheck.Shared.cs" Link="Launcher\Core\%(Filename)%(Extension)" />
+    <!-- v0.1.9: the state behind the Windows launcher's Achievements page (rows, tabs, counts, when to read again) holds no WPF type either, so it is tested here the same way. -->
+    <Compile Include="..\..\src\Tsuki.Launcher\AchievementsState.cs" Link="Launcher\Windows\AchievementsState.cs" />
+    <!-- v0.1.9, the icons: which picture a row of that page shows and the making of the icons, likewise without a WPF type (the bitmap is a type parameter). -->
+    <Compile Include="..\..\src\Tsuki.Launcher\AchievementPictures.cs" Link="Launcher\Windows\AchievementPictures.cs" />
+    <!-- v0.1.9: when the Windows launcher's settings pages follow settings.ini and save.dat changed by the game, and what they show then; no WPF type either. -->
+    <Compile Include="..\..\src\Tsuki.Launcher\ProfileWatch.cs" Link="Launcher\Windows\ProfileWatch.cs" />
   </ItemGroup>
 </Project>

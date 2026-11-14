@@ -38,6 +38,9 @@ public sealed class EbootLocatorTests(ITestOutputHelper output)
         }
 
         mismatches.AssertNone("located layout against the documented one");
+
+        // the trophy scene table found by content has the 27 records the achievement rules ask for (a table of another length is not used: FIXES D11 G-4)
+        Assert.Equal(Tsuki.Engine.Trophies.TrophyTable.LastChapter, result.Layout.TrophySceneCount);
         Assert.False(result.Layout.IsAnalysed);
         Assert.True(result.Found.Count >= 60, $"{result.Found.Count} tables");
         Assert.True(result.Elapsed < TimeSpan.FromSeconds(20), $"{result.Elapsed}");
@@ -171,6 +174,7 @@ public sealed class EbootLocatorTests(ITestOutputHelper output)
         }
 
         mismatches.AssertNone("the second eboot's layout against the documented one");
+        Assert.Equal(Tsuki.Engine.Trophies.TrophyTable.LastChapter, result.Layout.TrophySceneCount);
 
         // every table's bytes are identical to the verified eboot's (the differing bytes are code and version words)
         byte[] mine = SharedEboot.Data;

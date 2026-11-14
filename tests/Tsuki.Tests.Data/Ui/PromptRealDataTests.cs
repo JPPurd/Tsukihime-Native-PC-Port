@@ -243,7 +243,7 @@ public sealed class PromptRealDataTests
             }
 
             // package K21: the headings of the clipboard, opacity and background-mute rows (a ^ breaks the two-line English ones), the Off / On words, the percent label;
-            // package K23: the Text Hooker Output and Text WebSocket headings; package K24: the Screenshot Notice heading
+            // package K23: the Text Hooker Output and Text WebSocket headings; package K24: the Screenshot Notify heading
             foreach (string word in new[] { UiPrompts.CopyTextHeading(l), UiPrompts.OpacityHeading(l), UiPrompts.MuteHeading(l), UiPrompts.TextHookerHeading(l), UiPrompts.WebSocketHeading(l), UiPrompts.ScreenshotNoticeHeading(l) })
             {
                 int ink = word.Count(ch => !char.IsWhiteSpace(ch) && ch != '^');
@@ -272,5 +272,163 @@ public sealed class PromptRealDataTests
         }
 
         Assert.True(GlyphQuads(p => UiPrompts.DrawPressAnyKey(p, 1f), Language.En) >= "PRESSANYKEY".Length);      // the glyphs, with their outline copies
+    }
+
+    /// <summary>
+    /// The characters of <paramref name="text"/> the font of <paramref name="l"/> has no glyph for, in the style the UI draws its words in (style 0): the layout
+    /// looks a character up by its UTF-8 bytes, in the "narrow" table (one and two bytes) or the language's wide table, and draws the blank fallback cell for one
+    /// that is in neither (LanguageGlyphs.CharGlyph). Counting the quads cannot tell: the fallback is a quad too.
+    /// </summary>
+    private static string MissingGlyphs(string text, Language l)
+    {
+        Tsuki.Engine.Text.FontTables fonts = new UiAssets(SharedSource.Source, l).Tables.Fonts;
+        string wide = l switch { Language.Ja => "ja_wide", Language.En => "en_wide", Language.Zc => "zc_wide", _ => "zt_wide" };
+        var missing = new System.Text.StringBuilder();
+        Span<byte> utf8 = stackalloc byte[4];
+        foreach (System.Text.Rune rune in text.EnumerateRunes())
+        {
+            if (System.Text.Rune.IsWhiteSpace(rune) || rune.Value == '^')
+            {
+                continue;                                                       // a space is an advance and ^ a line break: neither is looked up
+            }
+
+            int n = rune.EncodeToUtf8(utf8);
+            ulong key = 0;
+            for (int i = 0; i < n; i++)
+            {
+                key = (key << 8) | utf8[i];
+            }
+
+            if (fonts.Lookup(key >= 0x10000 ? wide : "narrow").Get(key) < 0)
+            {
+                missing.Append(rune.ToString());
+            }
+        }
+
+        return missing.ToString();
+    }
+
+    // every character of a string the port writes itself has a glyph in the language's own pages, and the string draws at least that many glyph quads
+    private static void AssertDrawn(string text, Language l, double scale)
+    {
+        Assert.True(MissingGlyphs(text, l).Length == 0, $"{l} \"{text}\": the language's font pages have no glyph for \"{MissingGlyphs(text, l)}\"");
+        int ink = text.Count(ch => !char.IsWhiteSpace(ch) && ch != '^');
+        int quads = GlyphQuads(p => UiPrompts.DrawText(p, text, 0, 20, 1f, scale), l);
+        Assert.True(quads >= ink && quads <= text.Length, $"{l} \"{text}\" draws {quads} glyphs for {ink} characters");
+    }
+
+    [GameDataFact]
+    public void EveryWordOfTheAchievementNoticeHasItsGlyphsAndEveryNameFitsTheBoxInEveryLanguage()
+    {
+        // v0.1.9. The check can tell a missing character: the Simplified Chinese pages have no 铜 (bronze) and the Traditional Chinese ones no 盃 (cup), which is why
+        // the port's words go around them; the pages do have 银 (silver) and 杯 (cup)
+        Assert.Equal("铜", MissingGlyphs("白金、金、银、铜", Language.Zc));
+        Assert.Equal("盃", MissingGlyphs("獎盃、獎杯", Language.Zt));
+        Assert.Equal(string.Empty, MissingGlyphs("Achievement unlocked: 30 / 30!", Language.En));
+
+        // the icons of the 30 achievements as the game makes them for the notice, from the player's own pictures (the same in every language)
+        UiComposedPicture[] icons = [.. Enumerable.Range(0, Tsuki.Engine.Trophies.TrophyTable.Count).Select(id =>
+        {
+            UiComposedPicture? icon = Tsuki.App.Services.TrophyIcons.Notice(SharedSource.Source, id);
+            Assert.True(icon is { Width: UiTrophyNotice.IconSize, Height: UiTrophyNotice.IconSize }, $"achievement {id} has no icon of the notice's size in this game folder");
+            Assert.Equal(UiTrophyNotice.IconSize * UiTrophyNotice.IconSize * 4, icon!.Rgba.Length);
+            return icon;
+        })];
+        Assert.Null(Tsuki.App.Services.TrophyIcons.Notice(SharedSource.Source, 30));
+        Assert.Null(Tsuki.App.Services.TrophyIcons.Notice(SharedSource.Source, -1));
+
+        foreach (Language l in Languages)
+        {
+            var assets = new UiAssets(SharedSource.Source, l);
+
+            // the two Config rows' headings (the notice and its sound, D7), at the size the rows draw them: two lines in English, one in the other languages; and the
+            // Screenshot Notify row's above them, whose English word changed with D9 ("Notify": the f and the y are in the pages too)
+            foreach (string heading in new[] { UiPrompts.TrophyNoticeHeading(l), UiPrompts.TrophySoundHeading(l), UiPrompts.ScreenshotNoticeHeading(l) })
+            {
+                AssertDrawn(heading, l, heading.Contains('^', StringComparison.Ordinal) ? 0.36 : 0.4);
+                AssertDrawn(heading, l, 0.4);
+            }
+
+            Assert.NotEqual(UiPrompts.TrophyNoticeHeading(l), UiPrompts.TrophySoundHeading(l));
+
+            // the port's own words at the sizes the notice draws them: the heading, the three names, the stand-in name
+            AssertDrawn(UiTrophyText.Heading(l), l, 0.32);
+            foreach (PortString id in new[] { PortString.AchievementNameAll, PortString.AchievementNameFirstLesson, PortString.AchievementNameEveryLesson })
+            {
+                Assert.DoesNotContain("{0}", PortText.Get(id, l), StringComparison.Ordinal);
+                AssertDrawn(PortText.Get(id, l), l, 0.4);
+            }
+
+            AssertDrawn(PortText.Format(PortString.AchievementNameNumbered, l, 27), l, 0.4);
+
+            // the 27 chapter achievements carry the game's own chapter title: ui_text 358 + the chapter's phase without the two digits and the space in front
+            var names = new List<string>();
+            for (int id = Tsuki.Engine.Trophies.TrophyTable.FirstChapter; id <= Tsuki.Engine.Trophies.TrophyTable.LastChapter; id++)
+            {
+                string raw = assets.Text(Tsuki.Engine.Trophies.TrophyTable.ChapterTextBase + Tsuki.Engine.Trophies.TrophyTable.ChapterPhase(id));
+                string name = UiTrophyText.Name(assets, id);
+                Assert.True(name.Length >= 2, $"{l} achievement {id} has no name");
+                Assert.Equal(raw.Length - 3, name.Length);
+                Assert.EndsWith(name, raw, StringComparison.Ordinal);
+                Assert.True(char.IsAsciiDigit(raw[0]) && char.IsAsciiDigit(raw[1]) && char.IsWhiteSpace(raw[2]), $"{l} chapter text of achievement {id} does not start with its day number");
+                Assert.NotEqual(PortText.Format(PortString.AchievementNameNumbered, l, id), name);
+                Assert.DoesNotContain('^', name);
+                AssertDrawn(name, l, 0.4);
+                AssertDrawn(name, l, 0.34);
+                names.Add(name);
+            }
+
+            Assert.Equal(names[23], names[24]);                                 // the two ways through day 14 share their chapter title
+            Assert.Equal(26, names.Distinct(StringComparer.Ordinal).Count());
+
+            // every notice the game can show, on the real pages (those of the title's catch-up are the same notices in shorter times): the box keeps its corner and
+            // its height, stays in the right half of the screen, and holds both lines whole (every glyph the two lines have is drawn inside it). Each shows its
+            // achievement's icon, which the host has made by the time the notice comes in
+            var notices = new List<(int Id, string Heading, string Name)>();
+            for (int id = 0; id < Tsuki.Engine.Trophies.TrophyTable.Count; id++)
+            {
+                notices.Add((id, UiTrophyText.Heading(l), UiTrophyText.Name(assets, id)));
+            }
+
+            float narrowest = float.MaxValue;
+            float widest = 0f;
+            foreach ((int id, string heading, string name) in notices)
+            {
+                UiRoot root = UiPreview.Open("mode", SharedSource.Source, new PreviewServices(l));
+                int plain = DrawList(root).Length;
+                root.Context.Assets.SetTrophyIcon(id, icons[id]);
+                UiTrophyNotice notice = root.ShowTrophy(Tsuki.Engine.Trophies.TrophyTable.Grade(id), heading, name, id);
+                for (int i = 0; i < UiTrophyNotice.FadeInFrames; i++)
+                {
+                    root.Step(new InputFrame { Frame = root.Context.Frame + 1 });
+                }
+
+                RectF box = notice.Box(root.Painter);
+                Assert.Equal((1880f, 18f, 84f), (box.Right, box.Y, box.H));
+                Assert.True(box.Bottom <= 104f);
+                Assert.True(box.X >= 960f, $"{l} achievement {id}: the box {box} of \"{name}\" reaches into the left half of the screen");
+                narrowest = MathF.Min(narrowest, box.W);
+                widest = MathF.Max(widest, box.W);
+                DrawCmd[] drawn = DrawList(root);
+                Assert.Equal(DrawKind.OverlaysBegin, drawn[plain].Kind);                            // the notice follows the overlay mark (v0.1.9)
+                DrawCmd[] added = drawn[(plain + 1)..];
+                DrawCmd[] glyphs = [.. added.Where(c => c.Texture.Kind == TextureKind.GlyphPage)];
+                int ink = (heading + name).Count(ch => !char.IsWhiteSpace(ch));
+                Assert.True(glyphs.Length >= ink, $"{l} achievement {id}: {glyphs.Length} glyphs drawn for the {ink} characters of \"{heading}\" and \"{name}\"");
+                Assert.All(glyphs, c => Assert.True(c.V0.X >= box.X + UiTrophyNotice.PlaceSize && c.V3.X <= box.Right - 8f && c.V0.Y >= box.Y && c.V3.Y <= box.Bottom, $"{l} achievement {id}: a glyph of \"{name}\" at ({c.V0.X}, {c.V0.Y})-({c.V3.X}, {c.V3.Y}) is outside the box {box}"));
+                Assert.All(added, c => Assert.True(c.V0.X >= box.X - 1f && c.V3.X <= box.Right + 1f && c.V0.Y >= box.Y - 1f && c.V3.Y <= box.Bottom + 1f, $"{l} achievement {id}: a quad is outside the box {box}"));
+
+                // the picture: the achievement's own icon, whole and pixel for pixel in the middle of the picture's place
+                DrawCmd picture = Assert.Single(added, c => c.Texture.Kind == TextureKind.UiComposed);
+                float inset = 2f + ((UiTrophyNotice.PlaceSize - UiTrophyNotice.IconSize) / 2f);
+                Assert.Equal((box.X + inset, box.Y + inset, box.X + inset + UiTrophyNotice.IconSize, box.Y + inset + UiTrophyNotice.IconSize), (picture.V0.X, picture.V0.Y, picture.V3.X, picture.V3.Y));
+                Assert.Equal((0f, 0f, 1f, 1f), (picture.V0.U, picture.V0.V, picture.V3.U, picture.V3.V));
+                Assert.Equal(UiTrophyPicture.Icon, notice.Picture);
+                Assert.Equal(UiComposedId.TrophyIcon(id), picture.Texture.A);
+                Assert.Same(icons[id], root.Context.Assets.Composed(picture.Texture.A, (Language)picture.Texture.B));
+            }
+
+            Assert.True(narrowest >= 300f && widest <= 920f, $"{l}: the boxes are {narrowest} to {widest} wide");
+        }
     }
 }

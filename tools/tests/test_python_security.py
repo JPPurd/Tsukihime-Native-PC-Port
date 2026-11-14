@@ -1,7 +1,10 @@
 """The environment gate refuses unsafe setups before importing tool packages."""
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -13,15 +16,17 @@ def checker(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("check_python", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    monkeypatch.setattr(module.sys, "version_info", (3, 14, 10, "final", 0))
-    monkeypatch.setattr(module.sys, "prefix", str(tmp_path))
-    monkeypatch.setattr(module.sys, "base_prefix", str(tmp_path / "base"))
+    # the checker gets stand-ins of its own for sys and importlib.metadata: patching the real modules would make pytest itself believe it runs on the
+    # simulated Python (pytest reads sys.version_info while it sets up the next fixture)
+    module.sys = types.SimpleNamespace(
+        version_info=(3, 14, 10, "final", 0), prefix=str(tmp_path), base_prefix=str(tmp_path / "base"),
+        platform=sys.platform, implementation=sys.implementation, argv=list(sys.argv), version=sys.version, executable=sys.executable)
     (tmp_path / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
     pins = {}
     for line in (path.parents[2] / "requirements-dev.txt").read_text().splitlines():
         name, _, version = line.partition(";")[0].strip().partition("==")
         pins[name] = version
-    monkeypatch.setattr(module.md, "version", pins.__getitem__)
+    module.md = types.SimpleNamespace(version=pins.__getitem__, PackageNotFoundError=importlib.metadata.PackageNotFoundError)
     return module
 
 

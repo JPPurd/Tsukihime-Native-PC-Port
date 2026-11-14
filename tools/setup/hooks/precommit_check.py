@@ -31,6 +31,10 @@ BLOCKED_PREFIXES = ("samples/", "scratch/", "ref/", "third_party/", ".venv/")
 GAME_DATA_EXT = {
     ".mrg", ".hed", ".nam", ".mzp", ".mzx", ".at9", ".vag", ".mp4", ".sfo",
     ".prx", ".sprx", ".self", ".fself", ".elf", ".pkg", ".trp", ".dds",
+    # sounds (v0.1.9): the port makes its one sound, the achievement chime, at run time, so
+    # no audio file belongs in the repository (src/Tsuki.Cli/Commands/ReleaseRules.cs
+    # refuses the same in a release)
+    ".wav", ".ogg", ".mp3", ".flac", ".opus", ".m4a", ".aac", ".wma", ".aif", ".aiff",
 }
 MAX_BYTES = 5 * 1024 * 1024
 SKIP_PATTERNS = [

@@ -44,7 +44,13 @@ public sealed class DisplayModeAppTests : IDisposable
         }
 
         using Process process = Process.Start(info)!;
-        Assert.True(process.WaitForExit(240_000), "the game did not exit");
+        if (!process.WaitForExit(240_000))
+        {
+            process.Kill(entireProcessTree: true);          // a game that hangs is stopped before the test fails: the one this test started, and nothing else
+            process.WaitForExit(10_000);
+            Assert.Fail("the game did not exit");
+        }
+
         return (process.ExitCode, File.ReadAllText(log));
     }
 

@@ -35,7 +35,10 @@ public sealed class PreviewDisplaySettings(PreviewServices owner) : IUiDisplaySe
     public IReadOnlyList<(int Width, int Height)> SizeChoices { get; set; } = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440)];
 }
 
-/// <summary>The port's switches of a preview game (packages K21, K23 and K24): the game's defaults at first (the hooker output and the screenshot notice on, the rest off); every change is logged.</summary>
+/// <summary>
+/// The port's switches of a preview game (packages K21, K23 and K24, v0.1.9): the game's defaults at first (the hooker output and the screenshot notice on, the rest
+/// off: the achievement notice and its sound too); every change is logged.
+/// </summary>
 public sealed class PreviewPortSettings(PreviewServices owner) : IUiPortSettings
 {
     private bool _mute;
@@ -43,6 +46,8 @@ public sealed class PreviewPortSettings(PreviewServices owner) : IUiPortSettings
     private bool _hooker = true;
     private bool _socket;
     private bool _notice = true;
+    private bool _trophyNotice;
+    private bool _trophySound;
 
     /// <inheritdoc/>
     public bool ScreenshotNotice
@@ -52,6 +57,28 @@ public sealed class PreviewPortSettings(PreviewServices owner) : IUiPortSettings
         {
             _notice = value;
             owner.Calls.Add(value ? "screenshot notice on" : "screenshot notice off");
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool TrophyNotice
+    {
+        get => _trophyNotice;
+        set
+        {
+            _trophyNotice = value;
+            owner.Calls.Add(value ? "achievement notice on" : "achievement notice off");
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool TrophySound
+    {
+        get => _trophySound;
+        set
+        {
+            _trophySound = value;
+            owner.Calls.Add(value ? "achievement sound on" : "achievement sound off");
         }
     }
 

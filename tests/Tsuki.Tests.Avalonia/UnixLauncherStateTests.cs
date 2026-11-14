@@ -118,7 +118,7 @@ public sealed class UnixLauncherStateTests : IDisposable
         }
         finally
         {
-            Stop(game);
+            await StopFollowed(model, game);
         }
     }
 
@@ -340,7 +340,7 @@ public sealed class UnixLauncherStateTests : IDisposable
         }
         finally
         {
-            Stop(game);
+            await StopFollowed(model, game);
         }
     }
 
@@ -468,6 +468,8 @@ public sealed class UnixLauncherStateTests : IDisposable
         }
 
         Assert.Contains(linux.Keys, row => row.Keys == "F12" && row.Action.EndsWith("Print Screen stays your desktop's own", StringComparison.Ordinal));
+        Assert.Contains(linux.Keys, row => row.Keys == "F12" && row.Action.Contains("a short message follows; Config › System › Screenshot Notify", StringComparison.Ordinal));  // FIXES D9
+        Assert.DoesNotContain(linux.Keys, row => row.Action.Contains("notice", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(linux.Keys, row => row.Action.Contains("Windows", StringComparison.Ordinal));
         Assert.Equal(KeyTable.Rows.Count, mac.Keys.Count);
         Assert.Equal(KeyTable.Essentials.Count, mac.EssentialKeys.Count);
@@ -570,6 +572,96 @@ public sealed class UnixLauncherStateTests : IDisposable
         server.List(UpdateSource.DefaultRepository, server.Release(UpdateSource.DefaultRepository, Version.Tag, [(name, archive), (UpdateSource.SumsAssetName, ReleaseFiles.Sums(Path.Combine(_root, UpdateSource.SumsAssetName), archive))]));
     }
 
+    [Fact]
+    public async Task AStepOfTheRefreshThatFailsDoesNotSkipTheOnesAfterItAndIsReportedOnce()
+    {
+        // a backups folder that could not be listed threw out of the refresh: the steps after it never ran (the Achievements page kept what it knew without a
+        // game folder, the window got no picture) and at the launcher's start nothing said so. Here the step that lists the backups fails without such a
+        // folder: a listener of the model throws when it hears of them
+        var model = Model("refresh", new Uri("http://127.0.0.1:9/"));
+        Directory.CreateDirectory(_paths.DataDirectory);
+        // earned after the model was made: only the step that reads the achievements, three steps after the backups, shows it
+        File.WriteAllText(_paths.TrophiesFile, "version=1\n1=earlier\n");
+        bool thrown = false;
+        var heard = new List<string?>();
+        model.PropertyChanged += (_, e) =>
+        {
+            lock (heard) { heard.Add(e.PropertyName); }
+            if (thrown || e.PropertyName != nameof(model.NoBackups)) { return; }
+            thrown = true;
+            throw new InvalidOperationException("deliberate error of the backups step");
+        };
+
+        await model.RefreshAsync();
+
+        Assert.True(thrown, "the refresh did not list the backups");
+        lock (heard) { Assert.Contains(nameof(model.Folder), heard); }
+        Assert.Equal(1, model.AchievementsEarned);
+        // said once, like an error nothing caught: the crash log, the log and the toast
+        string log = Path.Combine(_paths.DataDirectory, UnixLauncherCrash.FileName);
+        Assert.Equal("The launcher hit an error: deliberate error of the backups step. Details are in " + log + ".", model.Toast);
+        Assert.Single(File.ReadAllLines(log), line => line.Contains("System.InvalidOperationException: deliberate error of the backups step", StringComparison.Ordinal));
+        Assert.Single(model.Log.Lines(), line => line.EndsWith("launcher error: InvalidOperationException: deliberate error of the backups step", StringComparison.Ordinal));
+        // and kept for the verification modes, which fail on it (LauncherHeadlessTests.TheSelfTestFailsWhenAStepOfTheRefreshFailed)
+        Assert.Equal("deliberate error of the backups step", Assert.IsType<InvalidOperationException>(model.RefreshError).Message);
+
+        // a refresh without an error says nothing more, and forgets the one before it
+        await model.RefreshAsync();
+        Assert.Single(File.ReadAllLines(log), line => line.Contains("System.InvalidOperationException: deliberate error of the backups step", StringComparison.Ordinal));
+        Assert.Null(model.RefreshError);
+    }
+
+    [Fact]
+    public void TheEndOfTheGameIsSaidAlsoWhenSomethingBeforeItFails()
+    {
+        // the window steps aside when the game starts and comes back when the model says the game ended. An error between the game's end and that word left
+        // the window minimised. Here the first thing the end does, saying the play state, fails: a listener of the model throws
+        var model = Model("ended", new Uri("http://127.0.0.1:9/"));
+        var window = new PostedJobs();
+        SynchronizationContext? before = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(window);
+        try
+        {
+            var codes = new List<int>();
+            model.GameExited += codes.Add;
+            using Process game = LauncherHeadlessTests.Exiting(3);
+            model.Track(game);
+            bool armed = true;
+            model.PropertyChanged += (_, e) =>
+            {
+                if (!armed || e.PropertyName != nameof(model.PlayLabel)) { return; }
+                armed = false;
+                throw new InvalidOperationException("deliberate error at the game's end");
+            };
+
+            // the game's end arrives as a job of the window's thread
+            window.RunNext();
+            Assert.False(armed, "the game's end did not say the play state");
+            Assert.Equal([3], codes);
+            // and the error is not lost: it comes back to the window's thread, where the crash hook reports it
+            Assert.Equal("deliberate error at the game's end", Assert.Throws<InvalidOperationException>(window.RunNext).Message);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(before);
+        }
+    }
+
+    /// <summary>A window's thread without a window: what is posted to it waits until the test runs it, on the test's thread, with this context current.</summary>
+    private sealed class PostedJobs : SynchronizationContext
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<(SendOrPostCallback Job, object? State)> _jobs = [];
+
+        public override void Post(SendOrPostCallback d, object? state) => _jobs.Add((d, state));
+
+        /// <summary>Runs the next job, waiting up to a minute for it; what it throws comes out here.</summary>
+        public void RunNext()
+        {
+            Assert.True(_jobs.TryTake(out (SendOrPostCallback Job, object? State) next, TimeSpan.FromSeconds(60)), "nothing was posted to the window's thread");
+            next.Job(next.State);
+        }
+    }
+
     /// <summary>Ends a stand-in game. The model disposes a process it followed once it has ended, so a disposed one has ended already.</summary>
     private static void Stop(Process process)
     {
@@ -582,6 +674,21 @@ public sealed class UnixLauncherStateTests : IDisposable
         {
             // disposed by the model after it ended
         }
+    }
+
+    /// <summary>
+    /// Ends a stand-in game the model follows and waits until the model has handled its end (it reads the profile again, then says that the game ended): the
+    /// profile is deleted once the test is over, and a reading still under way finds it half gone. That reading runs in a method nobody awaits, so what it
+    /// throws then is reported after the test (xUnit's "[FATAL ERROR] System.IO.FileNotFoundException" for a backup's save.dat, a run in about ten).
+    /// A model that does not follow the game (a test that failed before Track) is not waited for.
+    /// </summary>
+    private static async Task StopFollowed(UnixLauncherModel model, Process game)
+    {
+        var ended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        model.GameExited += _ => ended.TrySetResult();
+        bool followed = model.GameRunning;
+        Stop(game);
+        if (followed) { await ended.Task.WaitAsync(TimeSpan.FromSeconds(60)); }
     }
 
     /// <summary>A long-running process standing in for the game (it is killed at the end of the test).</summary>

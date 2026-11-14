@@ -247,6 +247,7 @@ public sealed class ReleaseCheckTests : IDisposable
     [InlineData("image/movie/op.mp4", "is game data or a save")]
     [InlineData("eboot.bin", "is game data or a save")]
     [InlineData("save.dat", "is game data or a save")]
+    [InlineData("trophies.ini", "is game data or a save")]
     public void APictureOrGameDataInAFolderToBeReleasedIsRefusedOnEitherPlatform(string file, string why)
     {
         // package K46: pictures (bar the README's logo) and anything cut from a game folder never go out

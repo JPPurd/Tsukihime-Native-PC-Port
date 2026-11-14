@@ -263,7 +263,15 @@ public sealed class UpdateButtonTests : IDisposable
     {
         string install = UpdateEndToEndTests.CopyInstall(output, Path.Combine(_dir, "Tsukihime"));
         (string report, string after, int exit) = UpdateEndToEndTests.RunUpdate(install, Path.Combine(_dir, "profile"), api, _dir, extra);
-        Assert.DoesNotContain("FAIL", after, StringComparison.Ordinal);
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            // v0.1.9 FIXES D11 W-1: the launcher the update restarts into runs --selftest. On GitHub's hosted Windows runner that self-test never wrote a
+            // report, so this line saw "(no report of the new launcher)" there and passed. A self-test now always ends with a report, and what it measures
+            // on that machine (the display, the fonts) nobody can look at from here: its lines are judged on a Windows desktop only, as in the tests that
+            // are skipped there; the old launcher's report, which is what this test is about, is judged everywhere
+            Assert.DoesNotContain("FAIL", after, StringComparison.Ordinal);
+        }
+
         return (report, exit);
     }
 

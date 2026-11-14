@@ -60,7 +60,13 @@ public sealed class LauncherLaunchTests : IDisposable
         LaunchPlan plan = GameLauncher.Plan(app, game, paths, fullscreen: true, ["--hidden", "--mute", "--fast", "--save-dir", paths.DataDirectory, "--exit-after", "90"]);
         string gameFilesBefore = Fingerprint(game);
         using Process process = GameLauncher.Start(plan, paths);
-        Assert.True(process.WaitForExit(180_000), "the game did not exit after 90 steps");
+        if (!process.WaitForExit(180_000))
+        {
+            process.Kill(entireProcessTree: true);          // a game that hangs is stopped before the test fails: the one this test started, and nothing else
+            process.WaitForExit(10_000);
+            Assert.Fail("the game did not exit after 90 steps");
+        }
+
         Assert.Equal(0, process.ExitCode);
 
         // the log the launcher asked for names the folder it was given

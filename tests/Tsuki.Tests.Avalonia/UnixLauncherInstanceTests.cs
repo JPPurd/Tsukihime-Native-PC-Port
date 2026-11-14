@@ -22,11 +22,64 @@ public sealed class UnixLauncherInstanceTests : IDisposable
     {
         // the real program in a child process (Avalonia sets up once per process): the window path of Program.Main on the headless platform, which quits once the
         // window is up. Touching Dispatcher.UIThread before Avalonia's set-up made every start crash in the main loop, and only this path showed it
+        string profile = Path.Combine(_root, "smoke-profile");
+        await WindowSmoke(profile);
+        using UnixLauncherLock? after = UnixLauncherLock.TryAcquire(new LauncherPaths(profile));
+        Assert.True(after is not null, "the lock outlived the launcher");
+    }
+
+    [Fact]
+    public async Task TheWindowPathStartsWhenFontconfigScansAFontFolderInsideTheLauncher()
+    {
+        // Linux with FreeType 2.14 or newer (Ubuntu 26.04): a font folder fontconfig has no cache for is scanned inside the launcher, the scan brings the system's
+        // HarfBuzz into the process, and the launcher's own HarfBuzz then called into it: "free(): invalid pointer", exit 134, at every such start (OwnHarfBuzz).
+        // Here the launcher gets a home of its own with one font in its font folder and no cache at all
+        if (!OperatingSystem.IsLinux()) { Assert.Skip("fontconfig and the system's FreeType are Linux's; macOS and Windows do not load them"); }
+        string font = SystemFont() ?? string.Empty;
+        if (font.Length == 0) { Assert.Skip("no .ttf or .otf file under /usr/share/fonts to copy"); }
+        string home = Path.Combine(_root, "home");
+        string data = Path.Combine(home, ".local", "share");
+        Directory.CreateDirectory(Path.Combine(data, "fonts"));
+        File.Copy(font, Path.Combine(data, "fonts", "copy" + Path.GetExtension(font)));
+        await WindowSmoke(Path.Combine(_root, "cold-profile"), start =>
+        {
+            start.Environment["HOME"] = home;
+            start.Environment["XDG_DATA_HOME"] = data;
+            start.Environment["XDG_CONFIG_HOME"] = Path.Combine(home, ".config");
+            start.Environment["XDG_CACHE_HOME"] = Path.Combine(home, ".cache");
+            // the system's own fontconfig files, which name the user's font folder
+            start.Environment.Remove("FONTCONFIG_FILE");
+            start.Environment.Remove("FONTCONFIG_PATH");
+        });
+    }
+
+    /// <summary>A font file of the system, or null (the first by name, so that every run copies the same one).</summary>
+    private static string? SystemFont()
+    {
+        try
+        {
+            return Directory.EnumerateFiles("/usr/share/fonts", "*", new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true })
+                .Where(file => file.EndsWith(".ttf", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".otf", StringComparison.OrdinalIgnoreCase))
+                .Order(StringComparer.Ordinal)
+                .FirstOrDefault();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Starts the real launcher's --window-smoke on <paramref name="profile"/> and waits for it: it must end with 0, say nothing of a crash and leave no crash log.
+    /// <paramref name="prepare"/> changes the start (its environment) first.
+    /// </summary>
+    private async Task WindowSmoke(string profile, Action<ProcessStartInfo>? prepare = null)
+    {
         string host = Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "TsukihimeLauncher.exe" : "TsukihimeLauncher");
         Assert.True(File.Exists(host), host + " is not beside the tests");
-        string profile = Path.Combine(_root, "smoke-profile");
         var start = new ProcessStartInfo(host) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
         foreach (string argument in new[] { "--window-smoke", "--data", profile, "--game", Path.Combine(_root, "no-game") }) { start.ArgumentList.Add(argument); }
+        prepare?.Invoke(start);
         using Process process = Process.Start(start)!;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(2));
@@ -46,8 +99,6 @@ public sealed class UnixLauncherInstanceTests : IDisposable
         string said = $"{await output} {await error} {(File.Exists(crash) ? await File.ReadAllTextAsync(crash, TestContext.Current.CancellationToken) : string.Empty)}";
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}; {said}");
         Assert.False(File.Exists(crash), "the window path wrote " + crash);
-        using UnixLauncherLock? after = UnixLauncherLock.TryAcquire(new LauncherPaths(profile));
-        Assert.True(after is not null, "the lock outlived the launcher");
     }
 
     [Fact]

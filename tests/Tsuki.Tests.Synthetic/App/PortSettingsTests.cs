@@ -67,7 +67,7 @@ public sealed class PortSettingsTests : IDisposable
     [Fact]
     public void TheScreenshotNoticeIsOnUnlessTheFileSaysOffAndTheSwitchSavesTheKey()
     {
-        // package K24: Config > System > Screenshot Notice; Off saves the picture without the toast
+        // package K24: Config > System > Screenshot Notify; Off saves the picture without the toast
         var fresh = new PortSettings(SettingsPath, new AppSettingsData());
         Assert.True(fresh.ScreenshotNotice);
         Assert.False(new PortSettings(SettingsPath, new AppSettingsData(ScreenshotNotice: false)).ScreenshotNotice);
@@ -92,6 +92,86 @@ public sealed class PortSettingsTests : IDisposable
         port.ScreenshotNotice = true;
         Assert.Equal(true, AppSettings.Load(SettingsPath).ScreenshotNotice);
         Assert.Contains("screenshot_notice on saved to settings.ini", log);
+    }
+
+    [Fact]
+    public void TheAchievementNoticeIsOffUnlessTheFileSaysOnAndTheSwitchSavesItsOwnKey()
+    {
+        // v0.1.9: Config > System > Achievement Notify (settings.ini trophy_notice), off until the player turns it on (the owner's choice); off earns achievements
+        // without the notice
+        var fresh = new PortSettings(SettingsPath, new AppSettingsData());
+        Assert.False(fresh.TrophyNotice);
+        Assert.False(new PortSettings(SettingsPath, new AppSettingsData(TrophyNotice: false)).TrophyNotice);
+        Assert.True(new PortSettings(SettingsPath, new AppSettingsData(TrophyNotice: true)).TrophyNotice);
+        Assert.False(new PortSettings(SettingsPath, new AppSettingsData(ScreenshotNotice: true)).TrophyNotice);       // the other notice's key is another key
+        Assert.False(new PortSettings(SettingsPath, new AppSettingsData(TrophySound: true)).TrophyNotice);            // and so is the sound's
+
+        AppSettings.Save(SettingsPath, new AppSettingsData(PromptSetting.Keyboard, ScreenshotNotice: false));
+        var log = new List<string>();
+        var port = new PortSettings(SettingsPath, AppSettings.Load(SettingsPath), log.Add);
+        int changes = 0;
+        port.Changed += () => changes++;
+        port.TrophyNotice = false;                                                       // already off: nothing to do
+        Assert.Equal(0, changes);
+        Assert.Empty(log);
+        Assert.DoesNotContain("trophy_notice", File.ReadAllText(SettingsPath), StringComparison.Ordinal);
+        port.TrophyNotice = true;
+        Assert.Equal(1, changes);
+        Assert.Contains("trophy_notice on saved to settings.ini", log);
+        AppSettingsData file = AppSettings.Load(SettingsPath);
+        Assert.Equal(true, file.TrophyNotice);
+        Assert.Equal(false, file.ScreenshotNotice);                                    // the other keys stay
+        Assert.Equal(PromptSetting.Keyboard, file.Prompts);
+        Assert.Null(file.TrophySound);
+        Assert.False(port.ScreenshotNotice);
+        Assert.Contains("trophy_notice=on", File.ReadAllText(SettingsPath), StringComparison.Ordinal);
+        Assert.True(new PortSettings(SettingsPath, file).TrophyNotice);                 // the next start reads it back
+        port.TrophyNotice = false;
+        Assert.Equal(false, AppSettings.Load(SettingsPath).TrophyNotice);
+        Assert.Contains("trophy_notice off saved to settings.ini", log);
+
+        // without a settings file (--no-save) the switch works for the run and says it was not saved
+        var unsaved = new PortSettings(null, new AppSettingsData(), log.Add);
+        unsaved.TrophyNotice = true;
+        Assert.True(unsaved.TrophyNotice);
+        Assert.Contains("trophy_notice on (not saved: no settings file)", log);
+    }
+
+    [Fact]
+    public void TheAchievementSoundIsOffUnlessTheFileSaysOnAndTheSwitchSavesItsOwnKey()
+    {
+        // v0.1.9: Config > System > Achievement Sound (settings.ini trophy_sound), off until the player turns it on; a key of its own, beside the notice's
+        var fresh = new PortSettings(SettingsPath, new AppSettingsData());
+        Assert.False(fresh.TrophySound);
+        Assert.True(new PortSettings(SettingsPath, new AppSettingsData(TrophySound: true)).TrophySound);
+        Assert.False(new PortSettings(SettingsPath, new AppSettingsData(TrophySound: false)).TrophySound);
+        Assert.False(new PortSettings(SettingsPath, new AppSettingsData(TrophyNotice: true)).TrophySound);            // the notice on does not turn the sound on
+        Assert.True(new PortSettings(SettingsPath, new AppSettingsData(TrophyNotice: false, TrophySound: true)).TrophySound);    // nor off: the game asks for both
+
+        AppSettings.Save(SettingsPath, new AppSettingsData(PromptSetting.Xbox, TrophyNotice: true));
+        var log = new List<string>();
+        var port = new PortSettings(SettingsPath, AppSettings.Load(SettingsPath), log.Add);
+        int changes = 0;
+        port.Changed += () => changes++;
+        port.TrophySound = false;                                                        // already off: nothing to do
+        Assert.Equal(0, changes);
+        Assert.Empty(log);
+        port.TrophySound = true;
+        Assert.Equal(1, changes);
+        Assert.Contains("trophy_sound on saved to settings.ini", log);
+        AppSettingsData file = AppSettings.Load(SettingsPath);
+        Assert.Equal((true, true, PromptSetting.Xbox), (file.TrophySound, file.TrophyNotice, file.Prompts));            // the other keys stay
+        Assert.Contains("trophy_sound=on", File.ReadAllText(SettingsPath), StringComparison.Ordinal);
+        Assert.True(new PortSettings(SettingsPath, file).TrophySound);                  // the next start reads it back
+        port.TrophySound = false;
+        Assert.Equal(false, AppSettings.Load(SettingsPath).TrophySound);
+        Assert.Contains("trophy_sound off saved to settings.ini", log);
+        Assert.True(port.TrophyNotice);
+
+        var unsaved = new PortSettings(null, new AppSettingsData(), log.Add);
+        unsaved.TrophySound = true;
+        Assert.True(unsaved.TrophySound);
+        Assert.Contains("trophy_sound on (not saved: no settings file)", log);
     }
 
     [Fact]

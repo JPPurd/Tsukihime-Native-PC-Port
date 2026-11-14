@@ -1,4 +1,5 @@
 using Tsuki.Engine.Contracts;
+using Tsuki.Engine.Trophies;
 using Tsuki.Ui.Screens;
 
 namespace Tsuki.Ui;
@@ -34,6 +35,7 @@ public static class UiPreview
         "config-port-half",
         "config-sound-port",
         "toast",
+        "trophy",
         "confirm",
         "confirm-quickload",
         "popup",
@@ -211,7 +213,7 @@ public static class UiPreview
                 else if (name is "config-port" or "config-port-half")
                 {
                     // package K21: the System tab's bottom with the Copy Text to Clipboard row on and the Text Window Opacity slider under the cursor (at 100 %, or at 50 % for "-half");
-                    // package K23: the Text Hooker Output (on by default) and Text WebSocket (switched on here) rows between them; package K24: the Screenshot Notice row (on by
+                    // package K23: the Text Hooker Output (on by default) and Text WebSocket (switched on here) rows between them; package K24: the Screenshot Notify row (on by
                     // default) above them
                     Run(root, 60);
                     if (services.Port is { } port)
@@ -250,6 +252,21 @@ public static class UiPreview
                 root.ShowToast(PortText.Get(PortString.ScreenshotSaved, services.Language));
                 settle = UiToast.FadeInFrames + 4;
                 break;
+            case "trophy":
+            {
+                // v0.1.9: the achievement notice with the mode panel up, fully up: a gold one with its chapter's own title. The icon is the host's picture (cut from
+                // the player's pictures on a worker): a preview has none, says so (the notice would wait for its icon otherwise) and shows the grade's emblem, which
+                // the port draws
+                root.Push(new ModePanelScreen());
+                Run(root, 30);
+                UiAssets assets = root.Context.Assets;
+                const int Trophy = 14;
+                assets.SetTrophyIcon(Trophy, null);
+                root.ShowTrophy(TrophyTable.Grade(Trophy), UiTrophyText.Heading(assets.Language), UiTrophyText.Name(assets, Trophy), Trophy);
+                settle = UiTrophyNotice.FadeInFrames + 4;
+                break;
+            }
+
             case "mode":
                 root.Push(new ModePanelScreen());
                 settle = 30;
@@ -397,11 +414,14 @@ public static class UiPreview
 
             case "gallery-cg-strip":
             {
-                // a picture that stacks one strip per language, opened in the viewer (the language picks the strip)
+                // a picture that stacks one strip per language, opened in the viewer (the language picks the strip): the one whose strips lie furthest apart for
+                // its height (IMG2581: 1080 rows a strip, 1270 from one to the next), where a strip taken at the wrong rows shows most
                 Press(root, PadButtons.Right);
                 var cg = (GalleryCgPanel)gallery.Panel;
                 (int g, int k) = Enumerable.Range(0, cg.Unlocked.Count).SelectMany(g => Enumerable.Range(0, cg.Unlocked[g].Length).Select(k => (g, k)))
-                    .First(t => cg.Entry(t.g, t.k).LanguageStrip);
+                    .Where(t => cg.Entry(t.g, t.k).LanguageStrip)
+                    .OrderByDescending(t => (cg.Entry(t.g, t.k).BandStride - cg.Entry(t.g, t.k).Row.Height) / (double)Math.Max(cg.Entry(t.g, t.k).Row.Height, 1))
+                    .First();
                 int[] main = [.. Enumerable.Range(0, cg.Unlocked.Count).Where(i => cg.Unlocked[i].Length > 0)];
                 MoveTo(root, Array.IndexOf(main, g));
                 Press(root, PadButtons.Decide);

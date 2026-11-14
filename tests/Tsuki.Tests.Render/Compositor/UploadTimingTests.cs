@@ -15,14 +15,19 @@ namespace Tsuki.Tests.Render.Compositor;
 /// 16 MiB slices while a visible 1280 x 720 window presents at vsync and draws every resident tile through the
 /// display-list executor. No presented frame of the load may take more than 16.7 ms. Holds artifacts/gpu.lock
 /// (decision 4). The window closes itself well within 60 s.
+/// Each run's warm-up frames 60..119 (nothing loading) are its idle control: when more than half of them are over the limit,
+/// this PC is not presenting the window at 60 Hz or faster and the limit cannot tell an upload stall from the presentation rate
+/// (<see cref="UploadTimingGate"/>, v0.1.9 FIXES D10 Q-2). The test then stops after that run, keeps its functional checks
+/// (the load finishes, run 0's tiles read back equal, no GL error), still fails for a load frame over the limit in a run before it whose control passed
+/// (each such run is judged as before), and is otherwise skipped with the idle numbers. When every control passes it asserts as before.
 /// </summary>
 [Collection(SdlCollection.Name)]
 public sealed class UploadTimingTests(ITestOutputHelper output)
 {
     private const int Runs = 5;
-    private const int WarmFrames = 120;
+    private const int WarmFrames = UploadTimingGate.WarmFrames;
     private const int TailFrames = 30;
-    private const double FrameLimitMs = 16.7;
+    private const double FrameLimitMs = UploadTimingGate.FrameLimitMs;
 
     [GameDataFact]
     public void UploadingTheLargestPictureKeepsEveryFrameUnder16_7Milliseconds() => Measure(prewarm: true, runs: Runs);
@@ -56,8 +61,9 @@ public sealed class UploadTimingTests(ITestOutputHelper output)
         var scratch = new ThreadLocal<TileScratch>(() => new TileScratch());
 
         var allLoad = new List<double>();
+        var measured = new List<GateRun>();                                         // each run's idle control and load frames over the limit, for the gate's verdict
         int over = 0, idleFrames = 0, idleOver = 0;
-        for (int run = 0; run < runs && watchdog.Elapsed < TimeSpan.FromSeconds(45); run++)
+        for (int run = 0; run < runs && UploadTimingGate.MeasuresAnotherRun(measured) && watchdog.Elapsed < TimeSpan.FromSeconds(45); run++)
         {
             using var cache = new TextureCache(ctx.Device.Gl, spareCapacityBytes: 512L << 20);
             var pool = new StagingPool();
@@ -65,6 +71,7 @@ public sealed class UploadTimingTests(ITestOutputHelper output)
             var exec = new DisplayListExecutor(compositor, cache);
             var list = new DisplayList(512);
             var intervals = new List<double>();
+            var idle = new List<double>();
             var uploadMs = new List<double>();
             var slow = new List<string>();
             (ulong Idle, ulong Total, TimeSpan Own) cpu0 = default;
@@ -112,10 +119,9 @@ public sealed class UploadTimingTests(ITestOutputHelper output)
                     long ts = Stopwatch.GetTimestamp();
                     ctx.Window.Swap();
                     long now = Stopwatch.GetTimestamp();
-                    if (frame >= 60 && frame < WarmFrames)
+                    if (UploadTimingGate.IsIdleFrame(frame))
                     {
-                        idleFrames++;                                                     // idle control: no load yet
-                        idleOver += Stopwatch.GetElapsedTime(t0, now).TotalMilliseconds > FrameLimitMs ? 1 : 0;
+                        idle.Add(Stopwatch.GetElapsedTime(t0, now).TotalMilliseconds);  // idle control: no load yet
                     }
 
                     if (loadStart >= 0 && (loadEnd < 0 || frame == loadEnd))
@@ -160,11 +166,15 @@ public sealed class UploadTimingTests(ITestOutputHelper output)
 
             double[] iv = [.. intervals.Order()];
             int runOver = iv.Count(x => x > FrameLimitMs);
+            int runIdleOver = idle.Count(x => x > FrameLimitMs);
+            measured.Add(new GateRun(idle, runOver));                               // a run whose control failed is the last run (MeasuresAnotherRun)
             over += runOver;
+            idleFrames += idle.Count;
+            idleOver += runIdleOver;
             allLoad.AddRange(intervals);
             output.WriteLine(
                 Report.Fmt($"run {run}: load frames {intervals.Count}, decode start to last tile {Stopwatch.GetElapsedTime(decodeStart, lastTile).TotalMilliseconds:F1} ms; ") +
-                Report.Fmt($"frame p50 {Pct(iv, 0.5):F2} / p99 {Pct(iv, 0.99):F2} / max {iv[^1]:F2} ms; over {FrameLimitMs} ms: {runOver}; ") +
+                Report.Fmt($"frame p50 {Pct(iv, 0.5):F2} / p99 {Pct(iv, 0.99):F2} / max {iv[^1]:F2} ms; over {FrameLimitMs} ms: {runOver}; idle control {runIdleOver} of {idle.Count} over; ") +
                 Report.Fmt($"upload CPU per frame max {uploadMs.Max():F2} ms; staging peak {pool.PeakTotalBytes >> 20} MiB, waits {pool.Waits}; ") +
                 Report.Fmt($"textures {cache.Stats.Resident} ({cache.Stats.ResidentBytes >> 20} MiB), allocated {cache.Stats.Allocations}, recycled {cache.Stats.Recycles}; machine CPU busy {machineBusy:F0} % (this process {ownBusy:F0} %)"));
             foreach (string line in slow)
@@ -174,13 +184,23 @@ public sealed class UploadTimingTests(ITestOutputHelper output)
         }
 
         double[] all = [.. allLoad.Order()];
-        output.WriteLine(Report.Fmt($"all runs: {all.Length} load frames, p50 {Pct(all, 0.5):F2}, max {all[^1]:F2} ms, over {FrameLimitMs} ms: {over}; idle control (warm-up frames 60..{WarmFrames - 1}): {idleOver} of {idleFrames} over; GL {ctx.Device.Info.Version}; watchdog {watchdog.Elapsed.TotalSeconds:F1} s"));
+        output.WriteLine(Report.Fmt($"all runs: {all.Length} load frames, p50 {Pct(all, 0.5):F2}, max {all[^1]:F2} ms, over {FrameLimitMs} ms: {over}; idle control (warm-up frames {UploadTimingGate.IdleFirstFrame}..{WarmFrames - 1}): {idleOver} of {idleFrames} over; GL {ctx.Device.Info.Version}; watchdog {watchdog.Elapsed.TotalSeconds:F1} s"));
         output.WriteLine(prewarm ? "textures pre-created over the warm-up frames" : "textures allocated lazily at upload");
         Assert.Null(ctx.Device.TakeError());
         Assert.True(all.Length > 0);
+        GateVerdict verdict = UploadTimingGate.Judge(measured);
+        if (verdict.Skip is { } skip)
+        {
+            output.WriteLine(skip);
+        }
+
         if (assert)
         {
-            Assert.Equal(0, over);
+            Assert.Equal(0, verdict.JudgedOver);                                    // every run whose idle control passed is judged as before (all of them: over)
+            if (verdict.Skip is { } why)
+            {
+                Assert.Skip(why);                                                   // the functional checks and the judged runs have passed; the rest says nothing here
+            }
         }
     }
 
@@ -218,3 +238,84 @@ public sealed class UploadTimingTests(ITestOutputHelper output)
 
     private static double Pct(double[] sorted, double q) => sorted.Length == 0 ? 0 : sorted[Math.Min(sorted.Length - 1, (int)Math.Floor(q * (sorted.Length - 1)))];
 }
+
+/// <summary>
+/// What the upload timing gate may conclude from its own idle control (v0.1.9, FIXES D10 Q-2). Pure: no window, no GL, no game data, so
+/// <see cref="UploadTimingGateTests"/> pins it in every Render run, also in the runs that leave <see cref="UploadTimingTests"/> out.
+/// </summary>
+internal static class UploadTimingGate
+{
+    /// <summary>One frame at 60 Hz, with a little room: the gate's limit for a presented frame.</summary>
+    public const double FrameLimitMs = 16.7;
+
+    /// <summary>The first frame of a run's idle control (the frames before it let the window and its swap chain settle).</summary>
+    public const int IdleFirstFrame = 60;
+
+    /// <summary>A run's warm-up frames: the load starts at this frame, so the idle control is frames <see cref="IdleFirstFrame"/>..WarmFrames - 1.</summary>
+    public const int WarmFrames = 120;
+
+    /// <summary>Whether frame <paramref name="frame"/> of a run (0 the first) belongs to its idle control: the window presents at vsync and nothing loads.</summary>
+    public static bool IsIdleFrame(int frame) => frame is >= IdleFirstFrame and < WarmFrames;
+
+    /// <summary>
+    /// Whether the gate measures another run after <paramref name="done"/>: not after a run whose idle control failed, whose frame times say nothing (the
+    /// window is then shown for that one run, a few seconds, and not for all of them).
+    /// </summary>
+    public static bool MeasuresAnotherRun(IReadOnlyList<GateRun> done) => done.All(r => !CannotJudge(r.IdleMs));
+
+    /// <summary>
+    /// What the gate concludes from its runs, in their order. Each run whose idle control passed is judged as before:
+    /// <see cref="GateVerdict.JudgedOver"/> counts their load frames over <see cref="FrameLimitMs"/>, and any of them fails the gate. At the first run whose
+    /// control failed (the last one measured) the verdict ends with <see cref="GateVerdict.Skip"/>, the skip's words; that run's load frames are not judged. With
+    /// every control passed, Skip is null and JudgedOver counts the load frames over the limit of all the runs, as the gate always did.
+    /// </summary>
+    public static GateVerdict Judge(IReadOnlyList<GateRun> runs)
+    {
+        int judgedOver = 0;
+        for (int run = 0; run < runs.Count; run++)
+        {
+            if (CannotJudge(runs[run].IdleMs))
+            {
+                return new GateVerdict(judgedOver, SkipMessage(run, runs[run].IdleMs, judgedOver));
+            }
+
+            judgedOver += runs[run].Over;
+        }
+
+        return new GateVerdict(judgedOver, null);
+    }
+
+    /// <summary>
+    /// True when a run's idle frames (its warm-up frames 60..119: the window presents at vsync and nothing loads) show that this PC is not presenting the
+    /// window at 60 Hz or faster: more than half of them took longer than <see cref="FrameLimitMs"/>. The limit cannot then tell an upload stall from the
+    /// presentation rate. On 2026-11-12 the owner's PC, with a game running, showed 300 of 300 idle frames at about 30 ms. Half or fewer over, or no idle
+    /// frame at all, is no such evidence: the gate judges as before.
+    /// </summary>
+    public static bool CannotJudge(IReadOnlyCollection<double> idleMs) => idleMs.Count(ms => ms > FrameLimitMs) * 2 > idleMs.Count;
+
+    /// <summary>The skip's words: the idle numbers of the run whose control failed, what was still checked, and what the gate needs.</summary>
+    /// <param name="run">The run whose idle control failed (the test stops after it).</param>
+    /// <param name="idleMs">That run's idle frame times in milliseconds.</param>
+    /// <param name="overBefore">Load frames over the limit in the runs before it (their controls passed; in the gate's own runs the gate has already failed when this is not 0).</param>
+    public static string SkipMessage(int run, IReadOnlyCollection<double> idleMs, int overBefore)
+    {
+        double[] sorted = [.. idleMs.Order()];
+        double median = sorted.Length == 0 ? 0 : sorted[sorted.Length / 2];
+        string rate = median > 0 ? Report.Fmt($", about {1000 / median:F0} Hz") : string.Empty;
+        string before = run > 0 ? Report.Fmt($" Runs 0..{run - 1} passed their idle control, with {overBefore} load frames over {FrameLimitMs} ms.") : string.Empty;
+        return Report.Fmt($"This PC cannot judge the upload timing gate: in run {run} the idle control (warm-up frames {IdleFirstFrame}..{WarmFrames - 1}, nothing loading) had ") +
+            Report.Fmt($"{idleMs.Count(ms => ms > FrameLimitMs)} of {idleMs.Count} frames over {FrameLimitMs} ms (median {median:F1} ms{rate}), so the window is not ") +
+            Report.Fmt($"presented at 60 Hz or faster and the frame limit cannot tell an upload stall from the presentation rate.{before} The load finished, run 0's ") +
+            "tiles read back equal and GL reported no error. The gate needs a PC presenting at 60 Hz or faster (no game or other program busy with the GPU).";
+    }
+}
+
+/// <summary>One run of the upload timing gate as <see cref="UploadTimingGate.Judge"/> sees it.</summary>
+/// <param name="IdleMs">Its idle control's frame times in milliseconds (<see cref="UploadTimingGate.IsIdleFrame"/>).</param>
+/// <param name="Over">Its load frames over <see cref="UploadTimingGate.FrameLimitMs"/>.</param>
+internal readonly record struct GateRun(IReadOnlyCollection<double> IdleMs, int Over);
+
+/// <summary>The upload timing gate's verdict (<see cref="UploadTimingGate.Judge"/>).</summary>
+/// <param name="JudgedOver">Load frames over the limit in the runs whose idle control passed: the gate fails unless it is 0.</param>
+/// <param name="Skip">The skip's words when a run's idle control failed; null when every control passed.</param>
+internal readonly record struct GateVerdict(int JudgedOver, string? Skip);

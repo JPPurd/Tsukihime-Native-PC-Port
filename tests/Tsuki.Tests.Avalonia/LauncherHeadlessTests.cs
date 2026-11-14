@@ -49,13 +49,14 @@ public sealed class LauncherHeadlessTests : IDisposable
     }
 
     [Fact]
-    public async Task AllSevenPagesRenderAndEveryEnabledActionButtonHasAWorkingCommand()
+    public async Task AllEightPagesRenderAndEveryEnabledActionButtonHasAWorkingCommand()
     {
         var model = Model();
         await Run(async () =>
         {
             Assert.Equal(global::Avalonia.Styling.ThemeVariant.Dark, Application.Current?.RequestedThemeVariant);
             Assert.Equal(NavIcons.Help, model.NavItems.Single(item => item.Page == LauncherPage.Help).Glyph);
+            Assert.Equal(NavIcons.Cup, model.NavItems.Single(item => item.Page == LauncherPage.Achievements).Glyph);
             var window = Show(model);
             await model.RefreshAsync();
             foreach (LauncherPage page in Enum.GetValues<LauncherPage>())
@@ -79,7 +80,10 @@ public sealed class LauncherHeadlessTests : IDisposable
                 Assert.Empty(window.GetVisualDescendants().OfType<ComboBox>());
             }
 
-            Assert.Equal(7, model.NavItems.Count);
+            // one entry per page, in the pages' order: Achievements between Saves and Help
+            Assert.Equal(8, model.NavItems.Count);
+            Assert.Equal(Enum.GetValues<LauncherPage>(), model.NavItems.Select(item => item.Page));
+            Assert.Equal(LauncherTexts.AchievementsTitle, model.NavItems[6].Label);
             Assert.True(model.ReadyRows.Count > 0);
             Assert.Equal("Check for updates", model.UpdateButtonLabel);
             model.Page = LauncherPage.GameFiles;
@@ -109,6 +113,52 @@ public sealed class LauncherHeadlessTests : IDisposable
             window.Close();
             return Task.CompletedTask;
         });
+    }
+
+    [Fact]
+    public async Task APictureOfAWindowThatKeepsMovingIsStillTaken()
+    {
+        // The pictures of the render check and of the self-tests' --shots wait for two frames in a row that are the same. A window with an animation that never
+        // ends never gives two: its picture is still taken, without waiting long
+        var model = Model();
+        await Run(() =>
+        {
+            var window = Show(model);
+            var moving = new Border { Width = 300, Height = 300, Background = Brushes.White };
+            window.PageHost.Content = moving;
+            var fade = new global::Avalonia.Animation.Animation
+            {
+                Duration = TimeSpan.FromSeconds(1),
+                IterationCount = global::Avalonia.Animation.IterationCount.Infinite,
+                Children =
+                {
+                    new global::Avalonia.Animation.KeyFrame { Cue = new global::Avalonia.Animation.Cue(0), Setters = { new global::Avalonia.Styling.Setter(Visual.OpacityProperty, 0.0) } },
+                    new global::Avalonia.Animation.KeyFrame { Cue = new global::Avalonia.Animation.Cue(1), Setters = { new global::Avalonia.Styling.Setter(Visual.OpacityProperty, 1.0) } },
+                },
+            };
+            using var stop = new CancellationTokenSource();
+            _ = fade.RunAsync(moving, stop.Token);
+            Pump(window);
+            byte[] first = Png(UnixOffscreenRender.Frame(window));
+            Thread.Sleep(120);
+            var taking = Stopwatch.StartNew();
+            byte[] second = Png(UnixOffscreenRender.Frame(window));
+            Assert.True(taking.Elapsed < TimeSpan.FromSeconds(5), $"the picture took {taking.Elapsed.TotalSeconds:0.0} s");
+            Assert.False(first.AsSpan().SequenceEqual(second), "the window did not move: this test sees nothing");
+            stop.Cancel();
+            window.Close();
+            return Task.CompletedTask;
+        });
+
+        static byte[] Png(WriteableBitmap frame)
+        {
+            using (frame)
+            {
+                using var stream = new MemoryStream();
+                frame.Save(stream);
+                return stream.ToArray();
+            }
+        }
     }
 
     [Fact]
@@ -302,7 +352,7 @@ public sealed class LauncherHeadlessTests : IDisposable
             Assert.NotNull(window.Icon);
             // the unselected entries are muted, the selected one is bright
             TextBlock[] labels = window.Nav.GetVisualDescendants().OfType<TextBlock>().Where(t => t.Name == "Txt").ToArray();
-            Assert.Equal(7, labels.Length);
+            Assert.Equal(8, labels.Length);
             Assert.Equal(Color.Parse("#E9EDF8"), BrushColor(labels[0].Foreground));
             Assert.All(labels.Skip(1), label => Assert.Equal(Color.Parse("#98A2C8"), BrushColor(label.Foreground)));
             // Log is the glass button, PLAY carries its glyph and its letter spacing
@@ -475,6 +525,169 @@ public sealed class LauncherHeadlessTests : IDisposable
     }
 
     [Fact]
+    public async Task TheSelfTestFailsWhenAStepOfTheRefreshFailed()
+    {
+        // The refresh reports an error of one of its steps and goes on (UnixLauncherStateTests.AStepOfTheRefreshThatFailsDoesNotSkipTheOnesAfterItAndIsReportedOnce),
+        // which is right for the window. The verification modes run that refresh: with the error caught they went on and passed ("SELFTEST PASS", exit 0, and
+        // launcher_crash.log in a profile nobody reads), where the error itself had ended them. A hosted Mac's release check is these modes and nothing else
+        string report = Path.Combine(_root, "selftest.txt");
+        await Run(() =>
+        {
+            Assert.Equal(1, Program.SelfTest(FailingRefresh(), report, shots: null, updatedFrom: null));
+            Assert.Equal("SELFTEST FAIL: " + RefreshFailed, File.ReadAllText(report).TrimEnd());
+            // the launcher an update restarted into runs this check too, and the update's end-to-end tests read its report
+            Assert.Equal(1, Program.SelfTest(FailingRefresh(), report, shots: null, updatedFrom: new ReleaseVersion(0, 0, 1)));
+            Assert.Equal("SELFTEST FAIL: " + RefreshFailed, File.ReadAllText(report).TrimEnd());
+            // the same profile without the error passes as it always did (the crash log the failed ones left does not count)
+            Assert.True(File.Exists(Path.Combine(Paths().DataDirectory, UnixLauncherCrash.FileName)));
+            Assert.Equal(0, Program.SelfTest(Model(), report, shots: null, updatedFrom: null));
+            Assert.StartsWith("SELFTEST PASS: 8 pages, ", File.ReadAllText(report), StringComparison.Ordinal);
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task TheUpdateSelfTestFailsWhenAStepOfTheRefreshFailed()
+    {
+        string report = Path.Combine(_root, "update-selftest.txt");
+        await Run(() =>
+        {
+            Assert.Equal(1, Program.UpdateSelfTest(FailingRefresh(), Paths(), report, shots: null));
+            // said before GitHub's stand-in is asked: without the check the report was about the update it did not find there
+            Assert.Equal("UPDATE SELFTEST FAIL: " + RefreshFailed, File.ReadAllText(report).TrimEnd());
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task TheRenderCheckFailsWhenAStepOfTheRefreshFailed()
+    {
+        string pictures = Path.Combine(_root, "pictures");
+        Directory.CreateDirectory(pictures);
+        await Run(() =>
+        {
+            Assert.Equal(1, UnixOffscreenRender.Pages(FailingRefresh(), pictures, size: null));
+            // it stops at the refresh, where the error stopped it: no picture (without the check it drew all of them and ended with 0)
+            Assert.Empty(Directory.GetFiles(pictures));
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <summary>What a verification mode says of <see cref="FailingRefresh"/>'s error.</summary>
+    private const string RefreshFailed = "the refresh failed: InvalidOperationException: deliberate error of the backups step";
+
+    /// <summary>A model whose refresh fails in the step that lists the backups, without a folder that cannot be listed: a listener throws when it hears of them.</summary>
+    private UnixLauncherModel FailingRefresh()
+    {
+        UnixLauncherModel model = Model();
+        bool thrown = false;
+        model.PropertyChanged += (_, e) =>
+        {
+            if (thrown || e.PropertyName != nameof(model.NoBackups)) { return; }
+            thrown = true;
+            throw new InvalidOperationException("deliberate error of the backups step");
+        };
+        return model;
+    }
+
+    [Fact]
+    public async Task TheRenderCheckFailsWhenTheLauncherReportedAnErrorWhileItsWindowWasShown()
+    {
+        // The window coming to the front reports what goes wrong there and goes on (RunningGameTests.AnErrorWhileTheWindowComesToTheFrontIsReportedAndDoesNotLeaveTheHandler),
+        // which is right for the window. The verification modes show that window for their pictures: with the error caught they went on and ended with 0, over
+        // a launcher_crash.log in a profile nobody reads, where the error itself had ended them. A hosted Mac's release check reads only their exit codes
+        string pictures = Directory.CreateDirectory(Path.Combine(_root, "pictures")).FullName;
+        await Run(() =>
+        {
+            UnixLauncherModel model = FailingInFront();
+            Assert.Equal(1, UnixOffscreenRender.Pages(model, pictures, size: null));
+            // said at the end: the refresh itself was fine, the one error was reported while the window was up, and every picture is there
+            Assert.Null(model.RefreshError);
+            Assert.Equal(1, model.ReportedErrors);
+            Assert.Equal(ReportedInFront, Program.ReportedFailure(model));
+            Assert.True(File.Exists(Path.Combine(pictures, "play.png")));
+            Assert.True(File.Exists(Path.Combine(pictures, "update_failed.png")));
+            return Task.CompletedTask;
+        });
+
+        // the same profile without the error passes with the same pictures (the crash log the failed one left does not count)
+        string fine = Directory.CreateDirectory(Path.Combine(_root, "pictures-fine")).FullName;
+        await Run(() =>
+        {
+            Assert.True(File.Exists(Path.Combine(Paths().DataDirectory, UnixLauncherCrash.FileName)));
+            UnixLauncherModel model = Model();
+            Assert.Equal(0, UnixOffscreenRender.Pages(model, fine, size: null));
+            Assert.Equal(0, model.ReportedErrors);
+            Assert.Null(Program.ReportedFailure(model));
+            Assert.Equal(Directory.GetFiles(pictures).Select(Path.GetFileName).Order(), Directory.GetFiles(fine).Select(Path.GetFileName).Order());
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task TheSelfTestFailsWhenTheLauncherReportedAnErrorWhileItsWindowWasShown()
+    {
+        string report = Path.Combine(_root, "selftest.txt");
+        string shots = Path.Combine(_root, "shots");
+        await Run(() =>
+        {
+            // --selftest shows the window for --shots only
+            Assert.Equal(1, Program.SelfTest(FailingInFront(), report, shots, updatedFrom: null));
+            Assert.Equal("SELFTEST FAIL: " + ReportedInFront, File.ReadAllText(report).TrimEnd());
+            Assert.True(File.Exists(Path.Combine(shots, "play.png")));
+            // the same profile without the error passes as it always did
+            Assert.Equal(0, Program.SelfTest(Model(), report, shots, updatedFrom: null));
+            Assert.StartsWith("SELFTEST PASS: 8 pages, ", File.ReadAllText(report), StringComparison.Ordinal);
+            return Task.CompletedTask;
+        });
+    }
+
+    [Fact]
+    public async Task TheUpdateSelfTestFailsWhenTheLauncherReportedAnErrorWhileItsWindowWasShown()
+    {
+        // run to its end on an update the launcher refuses (a checksum that does not match: nothing is installed, nothing restarts). That end fails either
+        // way; its line is about the error the launcher reported, where it was about the update alone
+        using var server = new FakeGitHub();
+        Offer(server, new string('0', 64));
+        string report = Path.Combine(_root, "update-selftest.txt");
+        await Run(() =>
+        {
+            UnixLauncherModel model = FailingInFront(server.Base, LinuxRelease.Folder(_root, "install"));
+            Assert.Equal(1, Program.UpdateSelfTest(model, Paths(), report, Path.Combine(_root, "update-shots")));
+            Assert.Equal(UnixUpdateStage.Failed, model.UpdateStage);
+            Assert.Equal("UPDATE SELFTEST FAIL: " + ReportedInFront, File.ReadAllText(report).TrimEnd());
+            // the same refused update without the error: the update's own line
+            model = Model(server.Base, LinuxRelease.Folder(_root, "install-fine"));
+            Assert.Equal(1, Program.UpdateSelfTest(model, Paths(), report, Path.Combine(_root, "update-shots-fine")));
+            Assert.Equal(UnixUpdateStage.Failed, model.UpdateStage);
+            Assert.StartsWith("UPDATE SELFTEST FAIL: Update to " + Version.Tag + "; ", File.ReadAllText(report), StringComparison.Ordinal);
+            return Task.CompletedTask;
+        });
+    }
+
+    /// <summary>What a verification mode says of <see cref="FailingInFront"/>'s error.</summary>
+    private const string ReportedInFront = "the launcher reported an error: InvalidOperationException: deliberate error while the window comes to the front";
+
+    /// <summary>
+    /// A model whose refresh works and whose window fails as it comes to the front, which a window does when it is shown: a listener throws the first time
+    /// the play state is said once a window of this model has opened. The refresh says the play state too; in every verification mode it is over by then.
+    /// </summary>
+    private UnixLauncherModel FailingInFront(Uri? api = null, string? install = null)
+    {
+        UnixLauncherModel model = Model(api, install);
+        bool opened = false, thrown = false;
+        IDisposable watch = Window.WindowOpenedEvent.AddClassHandler(typeof(MainWindow), (window, _) => opened |= ReferenceEquals((window as MainWindow)?.DataContext, model));
+        model.PropertyChanged += (_, e) =>
+        {
+            if (!opened || thrown || e.PropertyName != nameof(model.PlayLabel)) { return; }
+            thrown = true;
+            watch.Dispose();
+            throw new InvalidOperationException("deliberate error while the window comes to the front");
+        };
+        return model;
+    }
+
+    [Fact]
     public async Task ASecondLauncherOnTheSameProfileOnlySaysTheFirstIsOpen()
     {
         await Run(() =>
@@ -590,6 +803,41 @@ public sealed class LauncherHeadlessTests : IDisposable
     }
 
     private static double RightEdge(Visual visual, Visual window) => visual.TranslatePoint(new Point(visual.Bounds.Width, 0), window)!.Value.X;
+
+    [Fact]
+    public async Task EveryPageOpensAtItsTopInTheSmallestWindow()
+    {
+        // a choice list (the window sizes, the languages, the achievement tabs) brought its chosen entry into view when the page opened, which scrolled the page
+        // down to that list wherever it lay below the fold: in a Steam Deck's 800 × 460 window the Display page opened in its middle
+        var model = Model();
+        await Run(async () =>
+        {
+            var window = new MainWindow(model) { Width = 800, Height = 460 };
+            window.Show();
+            await model.RefreshAsync();
+            foreach (LauncherPage page in Enum.GetValues<LauncherPage>())
+            {
+                model.Page = page;
+                Pump(window);
+                ScrollViewer scroll = window.PageHost.GetVisualDescendants().OfType<ScrollViewer>().First(viewer => viewer.Classes.Contains("Page"));
+                Assert.True(scroll.Extent.Height > scroll.Viewport.Height, $"{page} does not scroll at this size");
+                Assert.True(scroll.Offset.Y == 0, $"{page} opened scrolled down by {scroll.Offset.Y:0}");
+            }
+
+            window.Close();
+        });
+    }
+
+    [Fact]
+    public void TheRenderCheckTakesAWindowSize()
+    {
+        Assert.Equal((800, 460), Program.WindowSize("800x460"));
+        Assert.Equal((1200, 780), Program.WindowSize("1200X780"));
+        foreach (string? bad in new[] { null, "", "800", "800x", "x460", "0x460", "800x460x2", "wide", "-800x460" })
+        {
+            Assert.Null(Program.WindowSize(bad));
+        }
+    }
 
     [Theory]
     [InlineData(true)]
@@ -724,17 +972,27 @@ public sealed class LauncherHeadlessTests : IDisposable
             big.FitTo(new PixelRect(0, 0, 2560, 1400), 1.0);
             Assert.Equal((1200, 780), (big.Width, big.Height));
 
-            // at the smallest size every page's entry is in the sidebar, clear of the version note (which gives way), and PLAY is on the screen
-            foreach (double height in new[] { 460.0, MainWindow.SidebarNoteMinHeight - 1, MainWindow.SidebarNoteMinHeight, 780.0 })
+            // at the smallest size every page's entry is in the sidebar, clear of the version note (which gives way), and PLAY is on the screen: the eight
+            // entries need 502 px as they are drawn in a tall window, so a short one draws them tighter
+            foreach (double height in new[] { 460.0, MainWindow.SidebarCompactBelow - 1, MainWindow.SidebarCompactBelow, MainWindow.SidebarNoteMinHeight - 1, MainWindow.SidebarNoteMinHeight, 780.0 })
             {
                 var window = new MainWindow(Model()) { Width = 800, Height = height };
                 window.Show();
                 Pump(window);
-                ListBoxItem last = window.Nav.GetVisualDescendants().OfType<ListBoxItem>().Last();
+                ListBoxItem[] entries = window.Nav.GetVisualDescendants().OfType<ListBoxItem>().ToArray();
+                Assert.Equal(8, entries.Length);
+                ListBoxItem last = entries[^1];
                 double entriesEnd = last.TranslatePoint(new Point(0, last.Bounds.Height), window)!.Value.Y;
                 double noteTop = window.SidebarNote.IsEffectivelyVisible ? window.SidebarNote.TranslatePoint(default, window)!.Value.Y : window.Bounds.Height;
                 Assert.True(entriesEnd <= noteTop, $"{height}: the entries end at {entriesEnd:0}, the note starts at {noteTop:0}");
                 Assert.True(window.PlayButton.TranslatePoint(new Point(0, window.PlayButton.Bounds.Height), window)!.Value.Y <= window.Bounds.Height);
+                Assert.Equal(height >= MainWindow.SidebarNoteMinHeight, window.SidebarNote.IsEffectivelyVisible);
+
+                // only a short window is tighter: from SidebarCompactBelow on the sidebar is the one it always was (the list starts at 118, an entry takes 48)
+                bool compact = height < MainWindow.SidebarCompactBelow;
+                double listTop = window.Nav.TranslatePoint(default, window)!.Value.Y;
+                Assert.True(compact ? listTop < 118 : listTop == 118, $"{height}: the list starts at {listTop:0}");
+                Assert.All(entries, entry => Assert.Equal(compact ? 44 : 48, entry.Bounds.Height));
                 window.Close();
             }
 
@@ -789,6 +1047,15 @@ public sealed class LauncherHeadlessTests : IDisposable
         return window;
     }
 
+    /// <summary>A window whose Achievements timer looks every <paramref name="watchInterval"/> (an hour: only the test's own looks).</summary>
+    internal static MainWindow Show(UnixLauncherModel model, TimeSpan watchInterval)
+    {
+        var window = new MainWindow(model) { AchievementsWatchInterval = watchInterval };
+        window.Show();
+        Pump(window);
+        return window;
+    }
+
     internal static void Pump(Window window)
     {
         Dispatcher.UIThread.RunJobs();
@@ -816,7 +1083,7 @@ public sealed class LauncherHeadlessTests : IDisposable
     };
 
     /// <summary>A process that ends after about a second with <paramref name="code"/> (the stand-in for a game that failed).</summary>
-    private static Process Exiting(int code)
+    internal static Process Exiting(int code)
     {
         var start = OperatingSystem.IsWindows()
             ? new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), "/c ping -n 2 127.0.0.1 >NUL & exit " + code)
