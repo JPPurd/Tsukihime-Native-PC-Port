@@ -1,4 +1,6 @@
-// The saves page (package K17): what is in %APPDATA%\Tsuki\save.dat, backups of save.dat and settings.ini, restoring one, and importing a PS4 / shadPS4 save image.
+// The saves page (package K17): what is in %APPDATA%\Tsuki\save.dat, backups of save.dat, settings.ini and (v0.1.9) trophies.ini, restoring one, and importing a
+// PS4 / shadPS4 save image. Restore and import replace save.dat; settings.ini stays as it is. Achievements belong to the profile and only grow: before save.dat
+// is replaced, what it implies is recorded in trophies.ini, and a restore adds the backup's record to the profile's (both only while no game runs).
 // The launcher only touches %APPDATA%\Tsuki; a PS4 image is read (never written) from wherever it lies.
 using System.Globalization;
 using Tsuki.App.Services;
@@ -37,7 +39,7 @@ public sealed record BackupInfo(string Name, string Path, DateTime Created, IRea
 /// <summary>Save summaries, backups and imports.</summary>
 public static class SaveTools
 {
-    private static readonly string[] BackedUp = ["save.dat", "settings.ini"];
+    private static readonly string[] BackedUp = ["save.dat", "settings.ini", Tsuki.Engine.Trophies.TrophyLog.FileName];
 
     /// <summary>Reads a save file's slot count and config.</summary>
     public static SaveSummary Summarize(string savePath)
@@ -102,7 +104,7 @@ public static class SaveTools
         }
     }
 
-    /// <summary>Copies save.dat and settings.ini into <c>backups\(timestamp)\</c>; null when there is nothing to back up.</summary>
+    /// <summary>Copies save.dat, settings.ini and trophies.ini (those that exist) into <c>backups\(timestamp)\</c>; null when there is nothing to back up.</summary>
     /// <param name="paths">The profile.</param>
     /// <param name="now">The time for the folder name.</param>
     public static BackupInfo? Backup(LauncherPaths paths, DateTime now)
@@ -122,9 +124,46 @@ public static class SaveTools
         }
 
         Directory.CreateDirectory(folder);
-        foreach (string source in sources)
+        var copied = new List<string>();
+        try
         {
-            File.Copy(source, System.IO.Path.Combine(folder, System.IO.Path.GetFileName(source)), overwrite: false);
+            foreach (string source in sources)
+            {
+                string copy = System.IO.Path.Combine(folder, System.IO.Path.GetFileName(source));
+                File.Copy(source, copy, overwrite: false);
+                copied.Add(copy);
+            }
+        }
+        catch
+        {
+            // v0.1.9 FIXES D11 W-2: a copy failed (another program holds one of the files without sharing): the folder just made holds only a part of the profile
+            // and would be listed as a backup, so that part goes again; the caller hears why the backup failed, as before.
+            // FIXES D13 S-3: only what this call copied goes. Another caller that found the name free in the same second fills the same folder, and this call
+            // then fails on that caller's file: its backup must stay (the folder was deleted whole before, with a complete backup in it). A copy carries the
+            // read-only attribute of its source, which keeps Windows from deleting it, so the attribute is cleared first
+            foreach (string copy in copied)
+            {
+                try
+                {
+                    File.SetAttributes(copy, FileAttributes.Normal);
+                    File.Delete(copy);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // it stays, and its folder with it
+                }
+            }
+
+            try
+            {
+                Directory.Delete(folder);                                   // only when it is empty: what somebody else put there is not this call's to delete
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // it stays, with what is in it
+            }
+
+            throw;
         }
 
         return Describe(folder);
@@ -139,7 +178,19 @@ public static class SaveTools
             return [];
         }
 
-        return Directory.EnumerateDirectories(paths.BackupsDirectory)
+        string[] folders;
+        try
+        {
+            folders = Directory.GetDirectories(paths.BackupsDirectory);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // v0.1.9 FIXES D11 W-2: the backups folder is there and cannot be listed (a link whose target is gone, a folder of another user): no backups to show,
+            // not an exception in the middle of the launcher's refresh
+            return [];
+        }
+
+        return folders
             .Select(Describe)
             .Where(b => b.Files.Count > 0)
             .OrderByDescending(b => b.Created)
@@ -148,14 +199,25 @@ public static class SaveTools
     }
 
     /// <summary>
-    /// Puts a backup's save.dat back. The current save.dat is backed up first (so a restore can be undone); settings.ini is left as it is.
+    /// Puts a backup's save.dat back. The current save.dat is backed up first (so a restore can be undone); settings.ini is left as it is. The achievements are
+    /// kept: what the replaced save implied is recorded first (<see cref="Achievements.KeepBeforeSaveChange"/>), and the backup's trophies.ini is added to the
+    /// profile's (<see cref="Achievements.UniteBackupRecord"/>); neither is done while a game runs, and neither can make the restore fail.
     /// Returns the backup of the save that was replaced, or null when there was none.
     /// </summary>
+    /// <param name="paths">The profile.</param>
+    /// <param name="backup">The backup to put back.</param>
+    /// <param name="now">The time for the name of the backup of the current save.</param>
+    /// <param name="gameFolder">The game folder, for the chapter achievements the replaced save implies; null tells only the two lesson achievements.</param>
     /// <exception cref="FileNotFoundException">The backup holds no save.dat.</exception>
-    public static BackupInfo? Restore(LauncherPaths paths, BackupInfo backup, DateTime now)
+    public static BackupInfo? Restore(LauncherPaths paths, BackupInfo backup, DateTime now, string? gameFolder = null) =>
+        Restore(paths, backup, now, gameFolder, GameLauncher.IsGameRunning);
+
+    /// <summary><see cref="Restore(LauncherPaths, BackupInfo, DateTime, string)"/>, asking <paramref name="gameRunning"/> whether a game runs (the tests).</summary>
+    internal static BackupInfo? Restore(LauncherPaths paths, BackupInfo backup, DateTime now, string? gameFolder, Func<bool> gameRunning)
     {
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(backup);
+        ArgumentNullException.ThrowIfNull(gameRunning);
         string source = System.IO.Path.Combine(backup.Path, "save.dat");
         if (!File.Exists(source))
         {
@@ -163,27 +225,64 @@ public static class SaveTools
         }
 
         BackupInfo? previous = Backup(paths, now);
+
+        // while a game runs the record is the game's: it writes what it earns, and it recorded what its save implied when it started
+        bool keepRecord = !gameRunning();
+        if (keepRecord)
+        {
+            Achievements.KeepBeforeSaveChange(paths, gameFolder);
+        }
+
         Directory.CreateDirectory(paths.DataDirectory);
         string temp = paths.SaveFile + ".restore.tmp";
         File.Copy(source, temp, overwrite: true);
         File.Move(temp, paths.SaveFile, overwrite: true);
+        if (keepRecord)
+        {
+            Achievements.UniteBackupRecord(paths, backup.Path);
+        }
+
         return previous;
     }
 
-    private static BackupInfo Describe(string folder)
+    private static BackupInfo Describe(string folder) => Describe(folder, Directory.EnumerateFiles);
+
+    /// <summary>
+    /// One backup as <see cref="List"/> shows it. A backup can lose a file, or go altogether, while it is being listed (a file manager, the launcher of a second
+    /// profile window, a test's profile deleted while the end of a game is still being handled): a file that is gone is neither listed nor counted, and a folder
+    /// that is gone lists no file (List then leaves it out), so that listing never throws for it. The same holds for a file or a folder that is there and cannot
+    /// be read (a link whose target is gone, a folder of another user). <paramref name="listFiles"/> lists the folder's files (the tests give one that names a
+    /// file that is no longer there).
+    /// </summary>
+    internal static BackupInfo Describe(string folder, Func<string, IEnumerable<string>> listFiles)
     {
-        string[] files = Directory.EnumerateFiles(folder)
-            .Select(System.IO.Path.GetFileName)
-            .Where(n => n is not null)
-            .Select(n => n!)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-        long bytes = files.Sum(f => new FileInfo(System.IO.Path.Combine(folder, f)).Length);
+        var files = new List<string>();
+        long bytes = 0;
+        try
+        {
+            foreach (string file in listFiles(folder).Select(System.IO.Path.GetFileName).Where(n => n is not null).Select(n => n!).Order(StringComparer.Ordinal))
+            {
+                try
+                {
+                    bytes += new FileInfo(System.IO.Path.Combine(folder, file)).Length;
+                    files.Add(file);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // gone since the folder was listed, or not to be read (v0.1.9 FIXES D11 W-2)
+                }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // the whole backup is gone, or its folder cannot be listed (v0.1.9 FIXES D11 W-2): it lists no file, and List leaves it out
+        }
+
         string name = System.IO.Path.GetFileName(folder);
         DateTime created = DateTime.TryParseExact(name.Length >= 15 ? name[..15] : name, "yyyyMMdd-HHmmss", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime parsed)
             ? parsed
             : Directory.GetCreationTime(folder);
-        return new BackupInfo(name, folder, created, files, bytes, Summarize(System.IO.Path.Combine(folder, "save.dat")));
+        return new BackupInfo(name, folder, created, files.ToArray(), bytes, Summarize(System.IO.Path.Combine(folder, "save.dat")));
     }
 
     // -- PS4 / shadPS4 images ------------------------------------------------------------------------------------------
@@ -249,14 +348,30 @@ public static class SaveTools
     }
 
     /// <summary>
-    /// Replaces save.dat by the PS4 image's slots and system data. The current save is backed up first.
+    /// Replaces save.dat by the PS4 image's slots and system data. The current save is backed up first, and what it implied is recorded in trophies.ini
+    /// (<see cref="Achievements.KeepBeforeSaveChange"/>; not while a game runs, and never a cause of failure).
     /// Returns the backup (null when there was no save) and the number of slots imported.
     /// </summary>
-    public static (BackupInfo? Backup, int Slots) ImportPs4(LauncherPaths paths, string imagePath, DateTime now)
+    /// <param name="paths">The profile.</param>
+    /// <param name="imagePath">The PS4 save image.</param>
+    /// <param name="now">The time for the name of the backup.</param>
+    /// <param name="gameFolder">The game folder, for the chapter achievements the replaced save implies; null tells only the two lesson achievements.</param>
+    /// <exception cref="SaveFormatException">The file is not a save image of this game.</exception>
+    public static (BackupInfo? Backup, int Slots) ImportPs4(LauncherPaths paths, string imagePath, DateTime now, string? gameFolder = null) =>
+        ImportPs4(paths, imagePath, now, gameFolder, GameLauncher.IsGameRunning);
+
+    /// <summary><see cref="ImportPs4(LauncherPaths, string, DateTime, string)"/>, asking <paramref name="gameRunning"/> whether a game runs (the tests).</summary>
+    internal static (BackupInfo? Backup, int Slots) ImportPs4(LauncherPaths paths, string imagePath, DateTime now, string? gameFolder, Func<bool> gameRunning)
     {
         ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(gameRunning);
         SaveStore imported = ReadPs4Image(imagePath);
         BackupInfo? backup = Backup(paths, now);
+        if (!gameRunning())
+        {
+            Achievements.KeepBeforeSaveChange(paths, gameFolder);
+        }
+
         Directory.CreateDirectory(paths.DataDirectory);
         SaveFile.WriteAtomic(paths.SaveFile, imported);
         return (backup, imported.StoredSlots().Count());

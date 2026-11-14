@@ -267,6 +267,13 @@ public sealed class GameFolderSource : IGameData, IDisposable
         return ImageMzp.Open(a.Memory(entry));
     }
 
+    /// <summary>
+    /// Keeps the archives mapped for a caller inside Tsuki.Data that decodes single tiles through <see cref="OpenImage"/> or <see cref="OpenUiSheetImage"/>
+    /// (the achievement icons, v0.1.9): <see cref="Dispose"/> waits until the result is disposed, as it waits for <see cref="Picture(int, int)"/>.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">The source is disposed.</exception>
+    internal UseGate.Use EnterUse() => _uses.Enter(this);
+
     /// <summary>The picture a catalog lookup found (<see cref="Catalog"/>), decoded like <see cref="Picture(int, int)"/>.</summary>
     public Picture Picture(ImageId id) => Picture((int)id.Archive, id.Index);
 

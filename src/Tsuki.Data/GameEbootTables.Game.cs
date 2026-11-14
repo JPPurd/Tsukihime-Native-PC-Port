@@ -109,5 +109,7 @@ public sealed partial class GameEbootTables
         public IReadOnlyList<int> JumpKeepBits => _tables.FlowKeep.Bits;
 
         public IReadOnlyList<(int LastColumn, int Word)> JumpClears => _clears.Value;
+
+        public IReadOnlyList<int> TrophyScenes => _tables.Gallery.TrophyScenes;
     }
 }

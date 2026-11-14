@@ -1,4 +1,5 @@
 using Tsuki.Engine.Contracts;
+using Tsuki.Engine.Trophies;
 
 namespace Tsuki.Ui;
 
@@ -63,12 +64,30 @@ public sealed class UiRoot
     public UiToast? Toast => _toast;
 
     /// <summary>
-    /// True while the toast must not be drawn (package K21): the app sets it from the moment a screenshot is asked for until the frame was captured, so that a toast
-    /// still on show is never in the saved picture.
+    /// True while the toast and the achievement notice must not be drawn (package K21; v0.1.9): the app sets it from the moment a screenshot is asked for until the
+    /// frame was captured, so that a notice still on show is never in the saved picture.
     /// </summary>
     public bool HideToast { get; set; }
 
     private UiToast? _toast;
+
+    /// <summary>The achievement notice on show (v0.1.9), or null.</summary>
+    public UiTrophyNotice? TrophyNotice => _trophy;
+
+    /// <summary>How many achievement notices wait behind the one on show.</summary>
+    public int TrophyNoticesWaiting => _trophiesWaiting.Count;
+
+    /// <summary>The achievement notice that comes after the one on show, or null (the host has its icon made in time).</summary>
+    public UiTrophyNotice? NextTrophyNotice => _trophiesWaiting.Count > 0 ? _trophiesWaiting.Peek() : null;
+
+    /// <summary>
+    /// Raised in <see cref="Step"/> when an achievement notice starts its way in (its picture is chosen, the first frame it is drawn): the moment the host sounds the
+    /// chime for a notice whose <see cref="UiTrophyNotice.Chime"/> says so (v0.1.9).
+    /// </summary>
+    public event Action<UiTrophyNotice>? TrophyNoticeStarted;
+
+    private readonly Queue<UiTrophyNotice> _trophiesWaiting = new();
+    private UiTrophyNotice? _trophy;
 
     /// <summary>What the UI is doing.</summary>
     public UiMode Mode => _stack.Count == 0 ? UiMode.Story : _stack[0] is Screens.TitleScreen or Screens.BootScreen ? UiMode.Title : UiMode.Overlay;
@@ -175,6 +194,37 @@ public sealed class UiRoot
     /// <summary>Shows a toast with <paramref name="text"/> (package K21); a toast still on show is replaced. <paramref name="brief"/> false keeps it up longer (an address or an error to read; package K24).</summary>
     public void ShowToast(string text, bool brief = true) => _toast = new UiToast(text, brief);
 
+    /// <summary>
+    /// Shows an achievement notice (v0.1.9): a picture, <paramref name="heading"/> and <paramref name="name"/> at the top right. A notice on show is never
+    /// replaced: the new one waits behind it and behind those already waiting, and the one on show then holds for a shorter time.
+    /// The notice of one achievement (<paramref name="id"/> 0..29) shows that achievement's icon and does not come in before the host has settled it
+    /// (<see cref="UiAssets.SetTrophyIcon"/>, with null when there is none), for at most <see cref="UiTrophyNotice.IconWaitFrames"/>: a host that makes no icons
+    /// says so before it calls this. Without an icon the emblem of <paramref name="grade"/> is shown (the port draws it).
+    /// A notice of the title's catch-up (<paramref name="catchUp"/>) has the short times, and a key or a click the title answers while its menu is up
+    /// (<see cref="Screens.TitleScreen.Answered"/>) drops the ones that have not come in yet (the title still gets the key): the player is on the way elsewhere
+    /// (v0.1.9, D7).
+    /// </summary>
+    /// <param name="grade">The grade: its emblem stands in where there is no icon.</param>
+    /// <param name="heading">The small first line, in the game's language.</param>
+    /// <param name="name">The achievement's name.</param>
+    /// <param name="id">The trophy (0..29).</param>
+    /// <param name="catchUp">One of the notices of the title's catch-up (what a save's progress had already earned).</param>
+    /// <param name="chime">The start of its way in sounds the chime, when the player has it on (<see cref="TrophyNoticeStarted"/>).</param>
+    public UiTrophyNotice ShowTrophy(TrophyGrade grade, string heading, string name, int id, bool catchUp = false, bool chime = true)
+    {
+        var notice = new UiTrophyNotice(id, grade, heading, name, catchUp, chime);
+        if (_trophy is null)
+        {
+            _trophy = notice;
+        }
+        else
+        {
+            _trophiesWaiting.Enqueue(notice);
+        }
+
+        return notice;
+    }
+
     /// <summary>Steps the UI by one 60 Hz frame.</summary>
     public void Step(in InputFrame frame)
     {
@@ -187,6 +237,10 @@ public sealed class UiRoot
         _blurFrames = BlurScene ? _blurFrames + 1 : 0;
         UiInput input = ApplyGuideClick(UiInput.From(frame, _previousPointer));
         _previousPointer = frame.Pointer;
+        // a key or a click the title answers while it is on top with its menu up (its cursor, its items, PRESS ANY BUTTON, the quit question: TitleScreen.Answered)
+        // ends the line of the catch-up's notices: the player is on the way (v0.1.9, D7). The title gets the key first; a key or a click it has no use for, a pointer
+        // that only moves and the wheel leave the line as it is
+        Screens.TitleScreen? title = _stack.Count > 0 && _stack[^1] is Screens.TitleScreen { MenuShown: true } t ? t : null;
         UiScreen[] screens = [.. _stack];
         foreach (UiScreen s in screens)
         {
@@ -207,6 +261,10 @@ public sealed class UiRoot
             if (_stack.Contains(screens[^1]))
             {
                 screens[^1].Step(input);
+                if (title is { Answered: true } && ReferenceEquals(screens[^1], title))
+                {
+                    DropCatchUp();
+                }
             }
         }
 
@@ -238,6 +296,43 @@ public sealed class UiRoot
         if (_toast is { Done: true })
         {
             _toast = null;
+        }
+
+        if (_trophy is not null)
+        {
+            bool started = _trophy.Started;
+            _trophy.Step(_trophiesWaiting.Count > 0, Context.Assets);
+            if (!started && _trophy.Started)
+            {
+                TrophyNoticeStarted?.Invoke(_trophy);
+            }
+
+            if (_trophy.Done)
+            {
+                _trophy = _trophiesWaiting.Count > 0 ? _trophiesWaiting.Dequeue() : null;
+            }
+        }
+    }
+
+    // the line of the title's catch-up ends (v0.1.9, D7): the notices of it that have not come in are dropped, the one on show finishes its short time; a notice of
+    // its own (an achievement earned meanwhile) keeps its place
+    private void DropCatchUp()
+    {
+        if (_trophy is { CatchUp: true, Started: false })
+        {
+            _trophy = null;
+        }
+
+        UiTrophyNotice[] kept = [.. _trophiesWaiting.Where(n => !n.CatchUp)];
+        _trophiesWaiting.Clear();
+        foreach (UiTrophyNotice n in kept)
+        {
+            _trophiesWaiting.Enqueue(n);
+        }
+
+        if (_trophy is null && _trophiesWaiting.Count > 0)
+        {
+            _trophy = _trophiesWaiting.Dequeue();
         }
     }
 
@@ -305,10 +400,25 @@ public sealed class UiRoot
             UiStoryPromptView.Draw(_painter, Context, prompt);
         }
 
-        // the port's toast is the last thing drawn, over everything, and left out of a frame that is being captured (package K21)
-        if (_toast is not null && !HideToast)
+        // the port's toast and the achievement notice (v0.1.9) are the last things drawn, over everything, and no part of the game's picture (the PS4 draws no
+        // such thing into its frame): the mark before them lets the renderer keep the frame as it was without them, which the next transition takes as the
+        // outgoing picture and the screenshot key and the save thumbnails read. A frame without either has no mark. Both are left out of a frame drawn for the
+        // screenshot key (package K21)
+        bool toast = _toast is { Alpha: > 0f } && !HideToast;
+        bool trophy = _trophy is { Alpha: > 0f } && !HideToast;
+        if (toast || trophy)
         {
-            _toast.Draw(_painter);
+            list.Add(new DrawCmd { Kind = DrawKind.OverlaysBegin });
+        }
+
+        if (toast)
+        {
+            _toast!.Draw(_painter);
+        }
+
+        if (trophy)
+        {
+            _trophy!.Draw(_painter);
         }
     }
 

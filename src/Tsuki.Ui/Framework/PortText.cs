@@ -108,6 +108,21 @@ public enum PortString
 
     /// <summary>K46: the system could not open the folder dialog (on Linux: no xdg-desktop-portal and no zenity); {0} SDL's words, {1} the command line that names the folder.</summary>
     FolderDialogUnavailable,
+
+    /// <summary>v0.1.9: the heading of an achievement's notice (also each notice of the title's catch-up).</summary>
+    AchievementUnlocked,
+
+    /// <summary>v0.1.9: the name of the achievement for earning all the others (the port's own words; the chapter achievements carry the game's chapter titles).</summary>
+    AchievementNameAll,
+
+    /// <summary>v0.1.9: the name of the achievement for attending a first lesson.</summary>
+    AchievementNameFirstLesson,
+
+    /// <summary>v0.1.9: the name of the achievement for attending every lesson.</summary>
+    AchievementNameEveryLesson,
+
+    /// <summary>v0.1.9: the name shown when the game's data has no chapter title for an achievement ({0} its number).</summary>
+    AchievementNameNumbered,
 }
 
 /// <summary>The port's own strings in ja, en, zc and zt.</summary>
@@ -297,6 +312,18 @@ public static class PortText
             "无法打开选择文件夹的窗口 ({0})。\n\n请在启动游戏时指定 CUSA47999 文件夹的路径，例如:\n{1}\n\n或将环境变量 TSUKI_GAME_DIR 设置为该文件夹。在 Linux 上，选择文件夹的窗口需要 xdg-desktop-portal 或 zenity。",
             "無法開啟選擇資料夾的視窗 ({0})。\n\n請在啟動遊戲時指定 CUSA47999 資料夾的路徑，例如:\n{1}\n\n或將環境變數 TSUKI_GAME_DIR 設定為該資料夾。在 Linux 上，選擇資料夾的視窗需要 xdg-desktop-portal 或 zenity。",
         ],
+        // The achievement notice (v0.1.9). These are drawn with the game's own glyph pages, so every character must exist in the language's font (a real-data test
+        // checks it: PromptRealDataTests); they are the port's own words, not the console's.
+        // AchievementUnlocked
+        ["実績を解除しました", "Achievement unlocked", "成就已解锁", "成就已解鎖"],
+        // AchievementNameAll
+        ["すべての実績", "All Achievements", "全部成就", "全部成就"],
+        // AchievementNameFirstLesson
+        ["はじめての授業", "First Lesson", "第一堂课", "第一堂課"],
+        // AchievementNameEveryLesson
+        ["すべての授業", "Every Lesson", "所有课程", "所有課程"],
+        // AchievementNameNumbered
+        ["実績 {0}", "Achievement {0}", "成就 {0}", "成就 {0}"],
     ];
 
     /// <summary>The selectable languages, in the order of the table's columns.</summary>

@@ -1,0 +1,167 @@
+<UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:views="clr-namespace:Tsuki.Launcher.Avalonia.Views"
+             xmlns:core="clr-namespace:Tsuki.Launcher.Core" x:Class="Tsuki.Launcher.Avalonia.Views.AchievementsPage">
+  <!-- the Windows launcher's Achievements page (src/Tsuki.Launcher/Views/AchievementsPage.xaml), made to fit a page 486 px wide: the summary, the switches of the
+       notice and of its sound, the list under its three tabs. A grade is shown by its emblem, a cup the launcher's core draws in the tiles' frame; no picture
+       file is shipped (every Image takes a binding). -->
+  <UserControl.Styles>
+    <!-- The two cards above the list are a little tighter than another page's, as on Windows: 10 px under the summary's divider, 40 px emblems, the NOTIFY
+         card's rows Compact, 16 px at the foot of both. The values that change in a short page are set here, not on the controls (a control's own value would
+         win over the short page's). A card's style names the class Card too (Border.Card#SummaryCard): in Avalonia 11 a style with a class is a triggered one
+         and outranks a style with a name only, so with the name alone the theme's Card (20 px at its foot) won in every window. -->
+    <Style Selector="Border.Card#SummaryCard">
+      <Setter Property="Padding" Value="22,18,22,16"/>
+    </Style>
+    <Style Selector="Rectangle#SummaryDivider">
+      <Setter Property="Margin" Value="0,11,0,10"/>
+    </Style>
+    <Style Selector="ProgressBar#Progress">
+      <Setter Property="Margin" Value="0,16,0,2"/>
+    </Style>
+    <Style Selector="Border.Card#NoticeCard">
+      <Setter Property="Margin" Value="0,18,0,0"/>
+      <Setter Property="Padding" Value="22,18,22,16"/>
+    </Style>
+    <!-- A short page (class Short, below AchievementsPage.ShortBelow: the smallest window, a Steam Deck at 150 %, leaves 326 px): the page's header gives way
+         (the sidebar names the page), and the summary and the gap under it are tighter, so that the NOTIFY heading and the "Notify in the game" row are in
+         view as the page opens (D10 Q-3); the sound's row is one scroll down -->
+    <Style Selector="views|AchievementsPage.Short views|PageHeader#Header">
+      <Setter Property="IsVisible" Value="False"/>
+    </Style>
+    <Style Selector="views|AchievementsPage.Short Border#SummaryCard">
+      <Setter Property="Padding" Value="22,14,22,12"/>
+    </Style>
+    <Style Selector="views|AchievementsPage.Short Rectangle#SummaryDivider">
+      <Setter Property="Margin" Value="0,8,0,8"/>
+    </Style>
+    <Style Selector="views|AchievementsPage.Short ProgressBar#Progress">
+      <Setter Property="Margin" Value="0,10,0,2"/>
+    </Style>
+    <Style Selector="views|AchievementsPage.Short Border#NoticeCard">
+      <Setter Property="Margin" Value="0,14,0,0"/>
+      <Setter Property="Padding" Value="22,14,22,16"/>
+    </Style>
+  </UserControl.Styles>
+  <ScrollViewer x:Name="Scroll" Classes="Page">
+    <StackPanel Margin="0,0,0,24">
+      <views:PageHeader x:Name="Header" Overline="{x:Static core:LauncherTexts.AchievementsOverline}" Title="{x:Static core:LauncherTexts.AchievementsHeading}" Description="{x:Static core:LauncherTexts.AchievementsDescription}"/>
+
+      <!-- the summary: the earned share, the count, the four grades' emblems with how many of each grade are earned, and the bar -->
+      <Border x:Name="SummaryCard" Classes="Card">
+        <StackPanel>
+          <TextBlock Text="{x:Static core:LauncherTexts.AchievementsProgressCaps}" Classes="SmallCaps"/>
+          <Rectangle x:Name="SummaryDivider" Classes="GoldDivider"/>
+          <Grid ColumnDefinitions="Auto,*">
+            <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+              <TextBlock x:Name="PercentText" Text="{Binding AchievementsPercent}" Classes="Heading" FontSize="46"/>
+              <TextBlock x:Name="CountText" Text="{Binding AchievementsCount}" Foreground="{StaticResource MutedBrush}" FontSize="13.5" Margin="2,0,0,0"/>
+            </StackPanel>
+            <ItemsControl x:Name="GradeList" Grid.Column="1" ItemsSource="{Binding AchievementGrades}" HorizontalAlignment="Right" VerticalAlignment="Center">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel Width="62">
+                    <!-- its bitmap is twice this size, so it is halved here, as a row's tile is. Its size is set, so its square is kept while the emblem is still
+                         being made (the first moment the page is shown) and nothing moves when it arrives -->
+                    <Image Name="Emblem" Source="{Binding Emblem}" Width="40" Height="40" HorizontalAlignment="Center" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                    <TextBlock Text="{Binding Count}" FontSize="13.5" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding Label}" Foreground="{StaticResource MutedBrush}" FontSize="11.5" HorizontalAlignment="Center"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Grid>
+          <ProgressBar x:Name="Progress" Minimum="0" Maximum="{Binding AchievementsTotal}" Value="{Binding AchievementsEarned}"/>
+        </StackPanel>
+      </Border>
+
+      <!-- the notice in the game and its sound (settings.ini trophy_notice and trophy_sound, both off until the player turns them on), and where the record is kept:
+           right under the summary, above the tabs and the 30 rows, so a player sent here to turn them on finds them (and Tab reaches them first).
+           A switch has no words of its own and its row is no control a screen reader stops on, so each switch is named by its row's title.
+           Its rows are Compact and it has 10 px over the record's note: in the window the launcher opens with (1200 x 780) the whole card is in view, in the
+           smallest (800 x 460) its heading and the first switch's row are -->
+      <Border x:Name="NoticeCard" Classes="Card">
+        <StackPanel>
+          <TextBlock x:Name="NoticeHeading" Text="{x:Static core:LauncherTexts.AchievementsNoticeCaps}" Classes="SmallCaps"/>
+          <Rectangle Classes="GoldDivider" Margin="0,11,0,4"/>
+          <HeaderedContentControl x:Name="NoticeRow" Classes="SettingRow Compact" Header="{x:Static core:LauncherTexts.AchievementsNoticeLabel}" Tag="{x:Static core:LauncherTexts.AchievementsNoticeDescription}">
+            <CheckBox x:Name="NoticeSwitch" Classes="Switch" IsChecked="{Binding TrophyNotice, Mode=TwoWay}" AutomationProperties.Name="{x:Static core:LauncherTexts.AchievementsNoticeLabel}"/>
+          </HeaderedContentControl>
+          <HeaderedContentControl x:Name="SoundRow" Classes="SettingRow Compact" Header="{x:Static core:LauncherTexts.AchievementsSoundLabel}" Tag="{x:Static core:LauncherTexts.AchievementsSoundDescription}">
+            <CheckBox x:Name="SoundSwitch" Classes="Switch" IsChecked="{Binding TrophySound, Mode=TwoWay}" AutomationProperties.Name="{x:Static core:LauncherTexts.AchievementsSoundLabel}"/>
+          </HeaderedContentControl>
+          <TextBlock x:Name="FileNote" Text="{x:Static core:LauncherTexts.AchievementsFileNote}" Classes="Muted" Margin="0,10,0,0"/>
+        </StackPanel>
+      </Border>
+
+      <!-- trophies.ini could not be read -->
+      <Border x:Name="DamagedBox" Margin="0,14,0,0" Padding="14,10" CornerRadius="8" Background="#1FE8C877" BorderBrush="#66E8C877" BorderThickness="1" IsVisible="{Binding AchievementsDamaged}">
+        <Grid ColumnDefinitions="Auto,*">
+          <Viewbox Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top">
+            <Path Classes="Icon" Data="{StaticResource WarningIcon}" Stroke="{StaticResource WarningBrush}" StrokeThickness="1.8"/>
+          </Viewbox>
+          <TextBlock Grid.Column="1" Text="{x:Static core:LauncherTexts.AchievementsDamagedNote}" TextWrapping="Wrap" FontSize="12.5" LineHeight="18" Foreground="#F2E3B8"/>
+        </Grid>
+      </Border>
+
+      <!-- no game folder to read the chapter names, the chapters' scenes and the icons from: the page works with the port's own names and the grades' emblems -->
+      <Border x:Name="NoGameNote" Margin="0,14,0,0" Padding="14,10" CornerRadius="8" Background="#145E8BFF" BorderBrush="#408FA6FF" BorderThickness="1" IsVisible="{Binding AchievementsNoGame}">
+        <Grid ColumnDefinitions="Auto,*,Auto">
+          <Viewbox Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top">
+            <Path Classes="Icon" Data="M12,3 A9,9 0 1 1 11.99,3 Z M12,11 L12,16.5 M12,7.4 L12,8" Stroke="{StaticResource MoonPaleBrush}" StrokeThickness="1.8"/>
+          </Viewbox>
+          <TextBlock Grid.Column="1" Text="{x:Static core:LauncherTexts.AchievementsNoGameNote}" TextWrapping="Wrap" FontSize="12.5" LineHeight="18" Foreground="{StaticResource SoftTextBrush}"/>
+          <Button Grid.Column="2" Content="{x:Static core:LauncherTexts.AchievementsOpenGameFiles}" Classes="LinkButton" VerticalAlignment="Center" Margin="16,0,2,0" Command="{Binding FixCommand}" CommandParameter="{x:Static core:LauncherPage.GameFiles}"/>
+        </Grid>
+      </Border>
+
+      <!-- the list: the three tabs with their counts, then one row per achievement of the tab on show -->
+      <Border x:Name="ListCard" Classes="Card" Margin="0,18,0,0" Padding="22,18,22,6">
+        <StackPanel>
+          <!-- 400 wide, narrower in a small window -->
+          <Grid>
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" MaxWidth="400"/></Grid.ColumnDefinitions>
+            <!-- always one tab chosen: a Ctrl+click (Cmd+click) on the chosen one goes to All instead of leaving none marked over the rows of a tab. Each tab's
+                 content is its words, which a screen reader says as the tab's name ("Earned (12)"), as on the Play page's choices -->
+            <ListBox x:Name="Tabs" Classes="Segmented" SelectionMode="AlwaysSelected" SelectedIndex="{Binding AchievementTabIndex, Mode=TwoWay}">
+              <ListBoxItem Content="{Binding AchievementsAllTab}"/>
+              <ListBoxItem Content="{Binding AchievementsEarnedTab}"/>
+              <ListBoxItem Content="{Binding AchievementsLockedTab}"/>
+            </ListBox>
+          </Grid>
+          <Rectangle Classes="GoldDivider" Margin="0,16,0,0"/>
+          <TextBlock x:Name="EmptyText" Text="{Binding AchievementsEmptyText}" Classes="Muted" Margin="0,20,0,18" IsVisible="{Binding AchievementsListEmpty}"/>
+          <ItemsControl x:Name="AchievementList" ItemsSource="{Binding AchievementRows}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <!-- one achievement: its tile, the name over how it is earned, and at the right its grade over "Locked" or the date; a long name wraps.
+                     The tile is the icon cut from the player's own pictures once the achievement is earned (the blank tile of its grade until it is made, the
+                     emblem of its grade where it cannot be made) and the padlock tile before; its bitmap is twice this size, so it is halved here. -->
+                <Grid ColumnDefinitions="66,*,Auto" MinHeight="66">
+                  <Panel Width="52" Height="52" HorizontalAlignment="Left" VerticalAlignment="Center">
+                    <Image Name="Tile" Source="{Binding Tile}" IsVisible="{Binding HasTile}" Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality"/>
+                  </Panel>
+                  <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,10,16,11">
+                    <TextBlock Text="{Binding Name}" Classes="RowTitle" Foreground="{Binding NameInk}" TextWrapping="Wrap"/>
+                    <TextBlock Text="{Binding Detail}" Classes="Muted" Margin="0,2,0,0"/>
+                  </StackPanel>
+                  <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Grade}" Foreground="{Binding GradeInk}" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,3,0,0">
+                      <Viewbox Width="14" Height="14" Margin="0,1,4,0" VerticalAlignment="Center">
+                        <Path Classes="Icon" Data="{Binding StateGlyph, Converter={StaticResource PathData}}" Stroke="{Binding GlyphInk}" StrokeThickness="2.4"/>
+                      </Viewbox>
+                      <TextBlock Text="{Binding State}" Foreground="{Binding StateInk}" FontSize="12" VerticalAlignment="Center"/>
+                    </StackPanel>
+                  </StackPanel>
+                  <Rectangle Grid.ColumnSpan="3" Height="1" Fill="{StaticResource DividerBrush}" VerticalAlignment="Bottom"/>
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

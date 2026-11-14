@@ -134,6 +134,7 @@ public partial class Shell : UserControl
                 LauncherPage.Language => new LanguagePage(),
                 LauncherPage.Controls => new ControlsPage(),
                 LauncherPage.Saves => new SavesPage(),
+                LauncherPage.Achievements => new AchievementsPage(),
                 _ => new HelpPage(),
             };
             _pages[page] = view;

@@ -13,7 +13,8 @@ namespace Tsuki.Engine.Game;
 /// </list>
 /// Verified against the PS4 functions run under unicorn (<c>tools/tsuki/flow_marks_emu.py</c>, <c>FlowMarksOracleTests</c>). The offsets below are the PS4's
 /// byte offsets into var_F (0x164B1D0) and var_G (0x164C620); <see cref="Vars"/> keeps both words in the same order. The trophy check the PS4 runs after
-/// marking a hidden node (0xB7CC0) is left out: the port has no trophies.
+/// marking a hidden node (0xB7CC0) is left out here: the hidden nodes (485, 498..530) are neither trophy scenes nor lessons, so it can award nothing; the
+/// achievements are earned at <c>_RDED</c> and <c>_TRPY</c> (<see cref="Tsuki.Engine.Trophies.TrophyRules"/>, v0.1.9).
 /// </summary>
 public static class FlowMarks
 {

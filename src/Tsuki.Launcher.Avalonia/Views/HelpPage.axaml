@@ -33,7 +33,7 @@
           <TextBlock Text="UPDATES" Classes="SmallCaps"/>
           <Rectangle Classes="GoldDivider" Margin="0,11,0,4"/>
           <HeaderedContentControl Classes="SettingRow" Header="Check for updates when the launcher starts" Tag="{Binding UpdateCheckDescription}" IsEnabled="{Binding UpdatesOn}">
-            <CheckBox Classes="Switch" IsChecked="{Binding CheckForUpdatesOnStart, Mode=TwoWay}"/>
+            <CheckBox Classes="Switch" IsChecked="{Binding CheckForUpdatesOnStart, Mode=TwoWay}" AutomationProperties.Name="Check for updates when the launcher starts"/>
           </HeaderedContentControl>
           <Grid ColumnDefinitions="Auto,*" Margin="0,14,0,0">
             <Viewbox Width="14" Height="14" Margin="0,2,10,0" VerticalAlignment="Top">

@@ -38,6 +38,8 @@ public readonly record struct MonitorOrigin(int X, int Y)
 /// (<c>http://127.0.0.1:port</c>, <c>http://localhost:port</c>, which native libraries such as Python's websocket-client send), always connect; every other page,
 /// <c>file://</c> pages (Origin null) and browser extensions included, is refused, and the game log names it once (K46).</param>
 /// <param name="RememberedFullscreen"><c>display_mode=</c>: the player's explicit F11 or Config Display Mode choice; absent means no choice was made.</param>
+/// <param name="TrophyNotice"><c>trophy_notice=</c> (v0.1.9): the notice in the game when an achievement is earned (off when the key is absent: <see cref="TrophyNoticeOn"/>). Off only hides the notice: the achievement is still recorded.</param>
+/// <param name="TrophySound"><c>trophy_sound=</c> (v0.1.9): a short chime as an achievement's notice comes in (off when the key is absent: <see cref="TrophySoundOn"/>). It sounds only while the notice is on too.</param>
 public readonly record struct AppSettingsData(
     PromptSetting Prompts = PromptSetting.Auto,
     bool? Fullscreen = null,
@@ -55,7 +57,9 @@ public readonly record struct AppSettingsData(
     bool? UpdateCheck = null,
     bool? ArcueidIcon = null,
     string? TextWebSocketOrigin = null,
-    bool? RememberedFullscreen = null)
+    bool? RememberedFullscreen = null,
+    bool? TrophyNotice = null,
+    bool? TrophySound = null)
 {
     /// <summary>The WebSocket port when the file names none (texthooker-ui's default).</summary>
     public const int DefaultTextWebSocketPort = 6677;
@@ -74,6 +78,12 @@ public readonly record struct AppSettingsData(
 
     /// <summary>The window size when both sides are set.</summary>
     public (int Width, int Height)? WindowSize => WindowWidth is { } w && WindowHeight is { } h ? (w, h) : null;
+
+    /// <summary>Whether the game shows an achievement's notice: <see cref="TrophyNotice"/>, off when the file does not say (the owner's choice for v0.1.9). The game and both launchers' switches read this.</summary>
+    public bool TrophyNoticeOn => TrophyNotice ?? false;
+
+    /// <summary>Whether the chime is switched on: <see cref="TrophySound"/>, off when the file does not say. The game plays it only while <see cref="TrophyNoticeOn"/> is true as well.</summary>
+    public bool TrophySoundOn => TrophySound ?? false;
 }
 
 /// <summary>Reads and writes <c>settings.ini</c>.</summary>
@@ -255,6 +265,12 @@ public static class AppSettings
                 case "screenshot_notice" when TryParseSwitch(value, out bool notice):
                     data = data with { ScreenshotNotice = notice };
                     break;
+                case "trophy_notice" when TryParseSwitch(value, out bool trophy):
+                    data = data with { TrophyNotice = trophy };
+                    break;
+                case "trophy_sound" when TryParseSwitch(value, out bool chime):
+                    data = data with { TrophySound = chime };
+                    break;
                 case "update_check" when TryParseSwitch(value, out bool check):
                     data = data with { UpdateCheck = check };
                     break;
@@ -348,8 +364,20 @@ public static class AppSettings
 
         if (data.ScreenshotNotice is { } notice)
         {
-            text.Append("# screenshot_notice: on (the default) shows the short \"Screenshot saved\" notice after F12; off saves the picture silently (Config > System > Screenshot Notice)\n");
+            text.Append("# screenshot_notice: on (the default) shows the short \"Screenshot saved\" message after F12; off saves the picture silently (Config > System > Screenshot Notify)\n");
             text.Append(CultureInfo.InvariantCulture, $"screenshot_notice={(notice ? "on" : "off")}\n");
+        }
+
+        if (data.TrophyNotice is { } trophy)
+        {
+            text.Append("# trophy_notice: on shows a message in the game when an achievement is earned; off (the default) shows none, and the achievement is still recorded (Config > System > Achievement Notify, or the launcher's Achievements page)\n");
+            text.Append(CultureInfo.InvariantCulture, $"trophy_notice={(trophy ? "on" : "off")}\n");
+        }
+
+        if (data.TrophySound is { } chime)
+        {
+            text.Append("# trophy_sound: on plays a short chime as an achievement's message appears, only while trophy_notice is on; off (the default) is silent (Config > System > Achievement Sound, or the launcher's Achievements page)\n");
+            text.Append(CultureInfo.InvariantCulture, $"trophy_sound={(chime ? "on" : "off")}\n");
         }
 
         if (data.UpdateCheck is { } check)
@@ -367,25 +395,22 @@ public static class AppSettings
         return text.ToString();
     }
 
-    /// <summary>Reads the file at <paramref name="path"/>; the defaults when it is missing or cannot be read.</summary>
-    public static AppSettingsData Load(string? path)
-    {
-        if (path is null)
-        {
-            return default;
-        }
+    // The game and the launcher both read and write the file, and either may do so while the other runs (v0.1.9: the launcher's Achievements switch). How long a
+    // write keeps trying to move its file over one that somebody holds open, how long a read keeps trying to open a file that is in use, and how old a
+    // temporary file may be to count as a write that is under way.
+    private const int MoveMilliseconds = 150;
+    private const int OpenMilliseconds = 120;
+    private const int WriteUnderWaySeconds = 5;
 
-        try
-        {
-            return File.Exists(path) ? Parse(File.ReadAllText(path)) : default;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return default;
-        }
-    }
+    /// <summary>Reads the file at <paramref name="path"/>; the defaults when it is missing or cannot be read.</summary>
+    public static AppSettingsData Load(string? path) => path is not null && TryReadText(path, out string text) ? Parse(text) : default;
 
     /// <summary>Writes the file (through a temporary file, so a crash leaves the old one); false when it could not be written.</summary>
+    /// <remarks>
+    /// The temporary file is moved over the file. On Windows that move is refused while anyone has the file open, so it is tried again for a moment (a reader
+    /// has the file only while it reads); when the holder does not let go the file is replaced with <c>File.Replace</c>, which goes through under a holder that
+    /// shares the file as <see cref="Load"/> does. A write that fails leaves the old file and no temporary file.
+    /// </remarks>
     public static bool Save(string? path, AppSettingsData data)
     {
         if (path is null)
@@ -393,12 +418,157 @@ public static class AppSettings
             return false;
         }
 
+        string temp = path + ".tmp";
+        bool replacing = false;
+        try
+        {
+            File.WriteAllText(temp, Format(data));
+            if (!TryMoveOver(temp, path))
+            {
+                replacing = true;
+                File.Replace(temp, path, null, ignoreMetadataErrors: true);
+            }
+
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            try
+            {
+                if (replacing && File.Exists(temp) && !File.Exists(path) && !Directory.Exists(path))
+                {
+                    // a replace that stopped half way took the old file away and did not bring the new one: the temporary file is the settings now
+                    File.Move(temp, path);
+                    return true;
+                }
+
+                File.Delete(temp);
+            }
+            catch (Exception inner) when (inner is IOException or UnauthorizedAccessException)
+            {
+                // nothing more to do: the write failed
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads the file, lets <paramref name="change"/> alter the values and writes it back, so that a program that owns one key keeps the others (the game's prompts,
+    /// the launcher's window keys). A file that is there and cannot be read is not written over (its other keys would be lost): false.
+    /// </summary>
+    public static bool Update(string? path, Func<AppSettingsData, AppSettingsData> change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        return path is not null && TryReadText(path, out string text) && Save(path, change(Parse(text)));
+    }
+
+    // The file's text; "" for a file that is not there. False when the file is there and could not be read. The file is opened so that a writer can replace it
+    // meanwhile, and an open that is refused because the other program is putting a new file in place at this moment is tried again for OpenMilliseconds.
+    private static bool TryReadText(string path, out string text)
+    {
+        text = string.Empty;
+        long start = Environment.TickCount64;
+        int misses = 0;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream, System.Text.Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                text = reader.ReadToEnd();
+                return true;
+            }
+            catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
+            {
+                // no file means the defaults; only in the instant in which a writer's File.Replace has taken the old file and not yet brought the new one
+                // (Windows) is the name looked at again
+                MissedOpen?.Invoke(path);
+                if (e is DirectoryNotFoundException || Environment.TickCount64 - start >= OpenMilliseconds || !BeingReplaced(path, ref misses))
+                {
+                    return true;
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException or System.Security.SecurityException)
+            {
+                // (a folder of that name will never open)
+                if (Environment.TickCount64 - start >= OpenMilliseconds || e is not (IOException or UnauthorizedAccessException) || Directory.Exists(path))
+                {
+                    return false;
+                }
+            }
+
+            Pause(attempt);
+        }
+    }
+
+    /// <summary>For the tests: called with the path each time a reading found no file there, before it decides whether to look again.</summary>
+    internal static Action<string>? MissedOpen { get; set; }
+
+    // True when a file that was just not found may be on its way in (TrophyLog's rule). While a writer's File.Replace puts the new file in place, its temporary
+    // file lies beside the name until the new file has the name: so a temporary file written a moment ago means "look again", and none means the new file has
+    // arrived (between the failed open and this look) or there is no file at all, which two more looks tell apart. Only Windows has that instant; elsewhere the
+    // one rename leaves none.
+    private static bool BeingReplaced(string path, ref int misses)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return false;
+        }
+
+        if (WriteUnderWay(path))
+        {
+            misses = 0;
+            return true;
+        }
+
+        return ++misses <= 2;
+    }
+
+    // true when a temporary file written a moment ago lies beside the name (an old one is what a stopped program left, and is not waited for)
+    private static bool WriteUnderWay(string path)
+    {
         try
         {
             string temp = path + ".tmp";
-            File.WriteAllText(temp, Format(data));
-            File.Move(temp, path, overwrite: true);
-            return true;
+            return File.Exists(temp) && (DateTime.UtcNow - File.GetLastWriteTimeUtc(temp)).Duration() < TimeSpan.FromSeconds(WriteUnderWaySeconds);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    // Moves the temporary file over the file. False when the file is there and the move stayed refused for MoveMilliseconds (somebody holds it open); a move
+    // that cannot work at all (a folder of that name, a read-only file, a folder that went away) throws at once.
+    private static bool TryMoveOver(string temp, string path)
+    {
+        long start = Environment.TickCount64;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(temp, path, overwrite: true);
+                return true;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException && HeldOpen(path))
+            {
+                if (Environment.TickCount64 - start >= MoveMilliseconds)
+                {
+                    return false;
+                }
+
+                Pause(attempt);
+            }
+        }
+    }
+
+    // true when a refused move over the file can be somebody's open handle: the file is there and is not marked read-only
+    private static bool HeldOpen(string path)
+    {
+        try
+        {
+            return File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReadOnly) == 0;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -406,10 +576,17 @@ public static class AppSettings
         }
     }
 
-    /// <summary>Reads the file, lets <paramref name="change"/> alter the values and writes it back, so that a program that owns one key keeps the others (the game's prompts, the launcher's window keys).</summary>
-    public static bool Update(string? path, Func<AppSettingsData, AppSettingsData> change)
+    // the first tries follow each other closely (a reader has the file for a fraction of a millisecond); the later ones are a millisecond apart
+    private static void Pause(int attempt)
     {
-        ArgumentNullException.ThrowIfNull(change);
-        return path is not null && Save(path, change(Load(path)));
+        if (attempt < 16)
+        {
+            Thread.SpinWait(200);
+            Thread.Yield();
+        }
+        else
+        {
+            Thread.Sleep(1);
+        }
     }
 }

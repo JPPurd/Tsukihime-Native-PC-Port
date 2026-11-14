@@ -50,7 +50,7 @@
                 <TextBlock Text="Fullscreen" Classes="RowTitle" FontSize="13.5"/>
                 <TextBlock Text="Borderless, on your display." Classes="Muted" FontSize="12" Margin="0,1,0,0"/>
               </StackPanel>
-              <CheckBox Grid.Column="1" Classes="Switch" IsChecked="{Binding Fullscreen, Mode=TwoWay}" VerticalAlignment="Center"/>
+              <CheckBox Grid.Column="1" Classes="Switch" IsChecked="{Binding Fullscreen, Mode=TwoWay}" VerticalAlignment="Center" AutomationProperties.Name="Fullscreen"/>
             </Grid>
             <TextBlock Text="Button prompts" Classes="RowTitle" FontSize="13.5" Margin="0,18,0,0"/>
             <ListBox Classes="Segmented" SelectedIndex="{Binding PromptsIndex, Mode=TwoWay}" Margin="0,8,0,0">

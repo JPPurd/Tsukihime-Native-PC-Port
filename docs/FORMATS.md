@@ -531,7 +531,7 @@ _SEPL / _SEFI(ch, loop, name, ...) -> se_nam.mrg lookup (VA 0xCC790; section 2 r
                             -> vse.hed entry i -> RIFF ATRAC9; SE channel ch plays on stream ch+6
 _MPLY(n, ...)            -> bgm.hed entry n (n+131 with the 5.1 option: entries absent) -> RIFF ATRAC9, streamed
 _TOMP(id)                -> language remap (VA 0x5E280) -> movie table (data 0xDC8C70) -> image/movie/*.mp4
-_TRPY(n)                 -> trophy n (optional on PC)
+_TRPY(n)                 -> trophy n (in a replay only n = 29; an achievement on PC, gallery 8)
 _RDST/_RDED(n)           -> scene_seen G[110..145] / scene_done G[300..335] (system data) -> gallery, title, New Game choice
 _RTST(n)                 -> per-save copies F[201..272] / F[600..687] (+ F[110] for QA scenes / replays)
 _JUMP, _SELD(var, N)     -> edge_seen G[400..443] (flowchart edges, table 0x2218D0 / choice flags 0x2214E0)

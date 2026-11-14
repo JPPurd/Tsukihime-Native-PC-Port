@@ -7,26 +7,27 @@
         <StackPanel>
           <TextBlock Text="GAME LANGUAGE" Classes="SmallCaps"/>
           <Rectangle Classes="GoldDivider" Margin="0,11,0,16"/>
+          <!-- a tile holds two lines of words: its name for a screen reader is the language's English name -->
           <ListBox Classes="Tiles" SelectedIndex="{Binding LanguageIndex, Mode=TwoWay}">
-            <ListBoxItem IsVisible="{Binding JaAvailable}">
+            <ListBoxItem IsVisible="{Binding JaAvailable}" AutomationProperties.Name="Japanese">
               <StackPanel>
                 <TextBlock Text="日本語" FontFamily="{StaticResource JapaneseFont}" FontSize="24"/>
                 <TextBlock Text="Japanese" Classes="Muted" Margin="0,5,0,0"/>
               </StackPanel>
             </ListBoxItem>
-            <ListBoxItem IsVisible="{Binding EnAvailable}">
+            <ListBoxItem IsVisible="{Binding EnAvailable}" AutomationProperties.Name="English">
               <StackPanel>
                 <TextBlock Text="English" FontFamily="{StaticResource SerifFont}" FontSize="24"/>
                 <TextBlock Text="English" Classes="Muted" Margin="0,5,0,0"/>
               </StackPanel>
             </ListBoxItem>
-            <ListBoxItem IsVisible="{Binding ZcAvailable}">
+            <ListBoxItem IsVisible="{Binding ZcAvailable}" AutomationProperties.Name="Simplified Chinese">
               <StackPanel>
                 <TextBlock Text="简体中文" FontFamily="{StaticResource ChineseSimplifiedFont}" FontSize="23"/>
                 <TextBlock Text="Simplified Chinese" Classes="Muted" Margin="0,5,0,0"/>
               </StackPanel>
             </ListBoxItem>
-            <ListBoxItem IsVisible="{Binding ZtAvailable}">
+            <ListBoxItem IsVisible="{Binding ZtAvailable}" AutomationProperties.Name="Traditional Chinese">
               <StackPanel>
                 <TextBlock Text="繁體中文" FontFamily="{StaticResource ChineseTraditionalFont}" FontSize="23"/>
                 <TextBlock Text="Traditional Chinese" Classes="Muted" Margin="0,5,0,0"/>

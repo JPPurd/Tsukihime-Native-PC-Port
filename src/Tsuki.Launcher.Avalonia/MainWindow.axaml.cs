@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private WindowState _beforeGame = WindowState.Normal;
     private bool _docked;
     private string? _dockPicture;
+    private readonly DispatcherTimer _achievementsWatch = new();
 
     public MainWindow() : this(new UnixLauncherModel(new LauncherPaths(ProfileDirectory.ForUser()), AppContext.BaseDirectory)) { }
 
@@ -27,7 +28,7 @@ public partial class MainWindow : Window
         DataContext = model;
         InitializeComponent();
         if ((Screens.ScreenFromWindow(this) ?? Screens.Primary) is { } screen) { FitTo(screen.WorkingArea, screen.Scaling); }
-        SizeChanged += (_, e) => SidebarNote.IsVisible = e.NewSize.Height >= SidebarNoteMinHeight;
+        SizeChanged += (_, e) => FitSidebar(e.NewSize.Height);
         QuestionYes.Command = new RelayCommand(_ => Answer(true));
         QuestionNo.Command = new RelayCommand(_ => Answer(false));
         ApplyUpdateButtonLook();
@@ -41,7 +42,14 @@ public partial class MainWindow : Window
         // closing the window during an update's download cancels it (nothing of the launcher's folder was changed yet)
         Closing += (_, _) => _model.CancelUpdate();
         // back in front after a game started from the application menu or Steam: the switches show what that game left in settings.ini
-        Activated += (_, _) => _model.ReadProfileAgain(onlyIfChanged: true);
+        Activated += (_, _) => BackInFront();
+        // while the window is open the Achievements page follows the game: trophies.ini and save.dat are looked at every two seconds
+        _achievementsWatch.Tick += (_, _) => _ = WatchAchievements();
+        Opened += (_, _) =>
+        {
+            _achievementsWatch.Interval = AchievementsWatchInterval;
+            _achievementsWatch.Start();
+        };
         Closed += (_, _) => Detach();
         ShowPage(_model.Page);
         if (global::Avalonia.Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime)
@@ -51,8 +59,23 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>The window height below which the sidebar drops the version and the fan-made note, so that the seven pages keep their entries.</summary>
-    internal const double SidebarNoteMinHeight = 600;
+    /// <summary>The window height below which the sidebar drops the version and the fan-made note, so that the eight pages keep their entries.</summary>
+    internal const double SidebarNoteMinHeight = 640;
+
+    /// <summary>
+    /// The window height below which the sidebar is drawn tighter (a Steam Deck at 150 % gives 460): the logo and the list move up and the entries are 40 high,
+    /// so that all eight end above the window's bottom. From this height on the sidebar looks as it always did.
+    /// </summary>
+    internal const double SidebarCompactBelow = 520;
+
+    /// <summary>How often the open window looks at trophies.ini and save.dat for the Achievements page.</summary>
+    internal static readonly TimeSpan AchievementsInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>That interval for this window (tests shorten it; read when the window opens).</summary>
+    internal TimeSpan AchievementsWatchInterval { get; init; } = AchievementsInterval;
+
+    /// <summary>True while the window looks for new achievements on its timer.</summary>
+    internal bool WatchesAchievements => _achievementsWatch.IsEnabled;
 
     /// <summary>True while the yes / no question is up.</summary>
     internal bool QuestionVisible => QuestionOverlay.IsVisible;
@@ -69,8 +92,42 @@ public partial class MainWindow : Window
         Height = Math.Max(MinHeight, Math.Min(Height, (workingArea.Height / scale) - 60));
     }
 
+    /// <summary>The sidebar for a window of that height: without the version note below <see cref="SidebarNoteMinHeight"/>, tighter below <see cref="SidebarCompactBelow"/>.</summary>
+    private void FitSidebar(double height)
+    {
+        SidebarNote.IsVisible = height >= SidebarNoteMinHeight;
+        bool compact = height < SidebarCompactBelow;
+        Nav.Classes.Set("Compact", compact);
+        SidebarLogo.Margin = new Thickness(26, compact ? 18 : 34, 16, 0);
+        Nav.Margin = new Thickness(0, compact ? 16 : 34, 0, 0);
+    }
+
+    /// <summary>
+    /// The window came to the front: the profile is read again when settings.ini or save.dat was written meanwhile. Nothing may leave this handler: the system's
+    /// own event loop calls it (X11, macOS), where an exception may not reach the crash hook of the window's jobs. An error is reported here as that hook does.
+    /// </summary>
+    private void BackInFront()
+    {
+        try
+        {
+            _model.ReadProfileAgain(onlyIfChanged: true);
+        }
+        catch (Exception e)
+        {
+            _model.ReportCrash(e);
+        }
+    }
+
+    /// <summary>
+    /// One look of the timer: the achievements are read again when trophies.ini or save.dat changed (two file lookups otherwise). Not while the window is
+    /// minimised, as it is while a game it started runs: the page is read again when that game ends and when the window comes back.
+    /// </summary>
+    internal Task WatchAchievements() =>
+        WindowState == WindowState.Minimized ? Task.CompletedTask : _model.ReadAchievementsAgainAsync(onlyIfChanged: true);
+
     private void Detach()
     {
+        _achievementsWatch.Stop();
         _model.PropertyChanged -= ModelChanged;
         _model.BrowseRequested -= BrowseForGame;
         _model.ImportRequested -= ChooseSaveImage;
@@ -133,11 +190,14 @@ public partial class MainWindow : Window
             LauncherPage.Language => new LanguagePage(),
             LauncherPage.Controls => new ControlsPage(),
             LauncherPage.Saves => new SavesPage(),
+            LauncherPage.Achievements => new AchievementsPage(),
             LauncherPage.Help => new HelpPage(),
             _ => new PlayPage(),
         };
 
         if (PageHost.Content is Control view) { view.DataContext = _model; }
+        // the page shows what is earned now, not what the last look of the timer found
+        if (page == LauncherPage.Achievements) { _ = _model.ReadAchievementsAgainAsync(onlyIfChanged: true); }
     }
 
     // the launcher steps aside while the game runs and comes back the way it was; it takes the front only when the game failed and the toast needs eyes

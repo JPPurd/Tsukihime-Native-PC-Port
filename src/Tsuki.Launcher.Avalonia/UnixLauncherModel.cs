@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
@@ -69,7 +70,7 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
         _paths = paths;
         _launcherDirectory = launcherDirectory;
         _gameFolderOverride = gameFolder;
-        _profile = LauncherProfile.Read(paths);
+        ReadProfile();
         NavItems =
         [
             new(LauncherPage.Play, "Play", NavIcons.Play),
@@ -78,13 +79,18 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
             new(LauncherPage.Language, "Language & sound", NavIcons.Globe),
             new(LauncherPage.Controls, "Controls", NavIcons.Pad),
             new(LauncherPage.Saves, "Saves", NavIcons.Save),
+            new(LauncherPage.Achievements, LauncherTexts.AchievementsTitle, NavIcons.Cup),
             new(LauncherPage.Help, "Help & about", NavIcons.Help),
         ];
         FixCommand = new RelayCommand(p => { if (p is LauncherPage page) { Page = page; } });
         PlayCommand = new RelayCommand(_ => Play(), _ => !GameRunning && !UpdateBusy);
         BrowseCommand = new RelayCommand(async _ => { if (BrowseRequested is { } browse) { await browse(); } });
         OpenGameFolderCommand = new RelayCommand(_ => OpenPath(Folder.Path), _ => Folder.State is not (FolderState.NotSet or FolderState.Missing));
-        RecheckCommand = new RelayCommand(async _ => await RefreshAsync());
+        RecheckCommand = new RelayCommand(async _ =>
+        {
+            ForgetAchievementFolder();
+            await RefreshAsync();
+        });
         OpenLogCommand = new RelayCommand(_ => OpenLog());
         OpenGuideCommand = new RelayCommand(_ => OpenGuide());
         OpenSavesFolderCommand = new RelayCommand(_ => OpenPath(EnsureDataDirectory()));
@@ -96,6 +102,10 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
         ShortcutCommand = new RelayCommand(_ => CreateShortcut(), _ => ShortcutSupported && !GameRunning);
         _log = LauncherLog.For(paths);
         CreateUpdateCommands();
+        // what trophies.ini and save.dat show without a game folder; RefreshAsync reads the chapter names and the chapters' scenes of the folder
+        _achievementStamp = Achievements.Stamp(paths);
+        _achievements = Achievements.Read(paths, null);
+        ShowAchievements();
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -140,6 +150,8 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
         get => _page;
         set
         {
+            // before the page is made: its rows carry their tiles when it first binds to them
+            if (value == LauncherPage.Achievements) { ShowAchievementTiles(); }
             if (Set(ref _page, value)) { Raise(nameof(SelectedNav)); }
         }
     }
@@ -289,20 +301,72 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
     /// <summary>Shows a PNG (null: the app's own icon) in the macOS Dock; tests give a stand-in.</summary>
     internal Func<string?, bool> DockIcon { get; init; } = MacDock.SetApplicationIcon;
 
+    /// <summary>
+    /// Reads the profile and the game folder again and shows what follows. The achievements come before the banner art and the window icon, as in the Windows
+    /// launcher: until they are read with the game folder the page has only what it can tell without one (the stand-in names, too few earned from a save).
+    /// A step that fails does not skip the ones after it (a folder that cannot be listed left the Achievements page without its game names, and nothing said
+    /// so): each runs, a game folder that could not be looked at stays what it was, and the first error is reported once at the end, like any error nothing
+    /// caught (launcher_crash.log, the log, the toast). Nothing is thrown; <see cref="RefreshError"/> keeps that error for the verification modes.
+    /// </summary>
     public async Task RefreshAsync()
     {
+        Exception? error = null;
+        void Step(Action step)
+        {
+            try { step(); }
+            catch (Exception e) { error ??= e; }
+        }
+
+        async Task StepAsync(Func<Task> step)
+        {
+            try { await step(); }
+            catch (Exception e) { error ??= e; }
+        }
+
+        Step(ReadProfile);
+        string? remembered = null;
+        GameFolderInfo folder = _folder;
+        await StepAsync(async () =>
+        {
+            remembered = _gameFolderOverride ?? _paths.ReadGameDirectory() ?? Environment.GetEnvironmentVariable("TSUKI_GAME_DIR");
+            string? asked = remembered;
+            folder = await Task.Run(() => GameFolderCheck.Inspect(asked));
+        });
+        Step(() =>
+        {
+            _folder = folder;
+            FolderText = folder.Path ?? remembered ?? string.Empty;
+        });
+        Step(() =>
+        {
+            _appExe = PlatformServices.FindApp(_launcherDirectory);
+            _missingFfmpeg = _appExe is null ? [] : PlatformServices.MissingFfmpeg(_appExe);
+        });
+        Step(ReloadReadyRows);
+        Step(ReloadBackups);
+        Step(() => Folder = folder);
+        await StepAsync(LoadAchievementsAsync);
+        await StepAsync(LoadHeroAsync);
+        await StepAsync(LoadGameIconAsync);
+        RefreshError = error;
+        if (error is not null) { ReportCrash(error); }
+    }
+
+    /// <summary>
+    /// The first error of the last refresh's steps; null when all of them ran through. The window reports it and goes on. The verification modes end with 1
+    /// on it (Program.RefreshFailure): a release's checks must not pass over a refresh that failed, and the error ended them before the refresh caught it.
+    /// </summary>
+    internal Exception? RefreshError { get; private set; }
+
+    /// <summary>
+    /// Reads settings.ini and save.dat (LauncherProfile.Read also probes the profile folder by writing to it). The size and time of settings.ini are kept first,
+    /// so that the look of the Achievements page's timer does not read again what this read, or what the launcher wrote itself.
+    /// </summary>
+    [MemberNotNull(nameof(_profile))]
+    private void ReadProfile()
+    {
+        KeepSettingsLook();
         _profile = LauncherProfile.Read(_paths);
-        string? remembered = _gameFolderOverride ?? _paths.ReadGameDirectory() ?? Environment.GetEnvironmentVariable("TSUKI_GAME_DIR");
-        GameFolderInfo folder = await Task.Run(() => GameFolderCheck.Inspect(remembered));
-        _folder = folder;
-        FolderText = folder.Path ?? remembered ?? string.Empty;
-        _appExe = PlatformServices.FindApp(_launcherDirectory);
-        _missingFfmpeg = _appExe is null ? [] : PlatformServices.MissingFfmpeg(_appExe);
-        ReloadReadyRows();
-        ReloadBackups();
-        Folder = folder;
-        await LoadHeroAsync();
-        await LoadGameIconAsync();
     }
 
     private void ReloadReadyRows()
@@ -440,18 +504,36 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
     /// </summary>
     internal void ReadProfileAgain(bool onlyIfChanged = false)
     {
-        (DateTime, DateTime) stamp = (File.GetLastWriteTimeUtc(_paths.SettingsFile), File.GetLastWriteTimeUtc(_paths.SaveFile));
+        (DateTime, DateTime) stamp = (WriteStamp(_paths.SettingsFile), WriteStamp(_paths.SaveFile));
         if (!onlyIfChanged || stamp != _profileStamp)
         {
             _profileStamp = stamp;
-            _profile = LauncherProfile.Read(_paths);
-            Raise(nameof(Fullscreen), nameof(StatusLine), nameof(VSync), nameof(PromptsIndex), nameof(WindowSize), nameof(WindowSizeNote), nameof(LanguageIndex), nameof(SaveText));
+            ReadProfile();
+            Raise(nameof(Fullscreen), nameof(StatusLine), nameof(VSync), nameof(PromptsIndex), nameof(WindowSize), nameof(WindowSizeNote), nameof(LanguageIndex), nameof(SaveText), nameof(TrophyNotice), nameof(TrophySound));
         }
 
+        // the game may have earned an achievement meanwhile: trophies.ini and save.dat have their own stamp (the page follows them every two seconds too)
+        _ = ReadAchievementsAgainAsync(onlyIfChanged: true);
         RaisePlayState();
     }
 
     private (DateTime Settings, DateTime Save) _profileStamp;
+
+    /// <summary>
+    /// When a file was last written, without ever throwing: this is asked each time the window comes to the front. On macOS and Linux the question itself fails
+    /// for a file in a folder the user may not enter (a profile folder left with another owner or without its permissions); such a file has no time.
+    /// </summary>
+    private static DateTime WriteStamp(string path)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or System.Security.SecurityException)
+        {
+            return default;
+        }
+    }
 
     /// <summary>
     /// Follows the game process PLAY started: PLAY and the save actions wait, the window steps aside, and when the game ends its exit code is said (on the window's
@@ -483,9 +565,17 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
         if (!ReferenceEquals(_process, process)) { return; }
         _process = null;
         process.Dispose();
-        RaisePlayState();
-        await RefreshAsync();
-        GameExited?.Invoke(code);
+        try
+        {
+            RaisePlayState();
+            await RefreshAsync();
+        }
+        finally
+        {
+            // whatever went wrong on the way: the window stepped aside for the game and comes back
+            GameExited?.Invoke(code);
+        }
+
         if (LauncherTexts.GameExited(code) is { } toast) { ShowToast(toast); }
     }
 
@@ -584,7 +674,8 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
         if (!await AskAsync(new LauncherQuestion(title, body, label)) || RefuseWhileGameRuns()) { return; }
         try
         {
-            SaveTools.Restore(_paths, backup, DateTime.Now);
+            // what the replaced save implied is recorded first, with the game folder's chapter scenes, and the backup's record is added (not while a game runs)
+            SaveTools.Restore(_paths, backup, DateTime.Now, AchievementFolder, AnyGameRunning);
             ShowToast("Restored " + backup.Name + ". The previous save is in the backup list.");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -609,7 +700,8 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
         if (!await AskAsync(new LauncherQuestion(title, body, label)) || RefuseWhileGameRuns()) { return; }
         try
         {
-            (BackupInfo? _, int slots) = SaveTools.ImportPs4(_paths, imagePath, DateTime.Now);
+            // what the replaced save implied is recorded first, with the game folder's chapter scenes (not while a game runs)
+            (BackupInfo? _, int slots) = SaveTools.ImportPs4(_paths, imagePath, DateTime.Now, AchievementFolder, AnyGameRunning);
             ShowToast($"Imported {slots} save slots from the PS4 image.");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or SaveFormatException or ArgumentException)
@@ -622,10 +714,12 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
 
     private void AfterSaveChange()
     {
-        _profile = LauncherProfile.Read(_paths);
+        ReadProfile();
         ReloadReadyRows();
         ReloadBackups();
         Raise();
+        // a restored or imported save may show achievements the old one did not
+        _ = ReadAchievementsAgainAsync(onlyIfChanged: true);
     }
 
     public async Task ApplyFolderText()
@@ -651,7 +745,7 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
             ShowToast("settings.ini could not be written (" + _paths.SettingsFile + ").");
         }
 
-        _profile = LauncherProfile.Read(_paths);
+        ReadProfile();
         ReloadReadyRows();
         Raise();
     }
@@ -747,15 +841,27 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
 
     /// <summary>
     /// An error nothing else caught (an exception of a button, say): appended to launcher_crash.log in the profile folder, and the player is told where it is.
-    /// Returns the log, or null when it could not be written.
+    /// Returns the log, or null when it could not be written. Each one is counted (<see cref="ReportedErrors"/>).
     /// </summary>
     internal string? ReportCrash(Exception error)
     {
+        ReportedErrors++;
+        FirstReportedError ??= error;
         string? log = UnixLauncherCrash.Write(_paths, error);
         _log.Write("launcher error: " + error.GetType().Name + ": " + error.Message);
         ShowToast(UnixLauncherCrash.Message(error, log));
         return log;
     }
+
+    /// <summary>
+    /// How many errors the launcher reported as ones nothing caught (<see cref="ReportCrash"/>: a step of the refresh, the window coming to the front, a job
+    /// of the window). The window goes on after each. A verification mode ends with 1 when this is not zero at its end (Program.ReportedFailure): a release's
+    /// checks read its exit code, not the launcher_crash.log of its profile.
+    /// </summary>
+    internal int ReportedErrors { get; private set; }
+
+    /// <summary>The first of those errors; null while there was none.</summary>
+    internal Exception? FirstReportedError { get; private set; }
 
     private void Raise(params string?[] names)
     {
@@ -768,7 +874,7 @@ public sealed partial class UnixLauncherModel : INotifyPropertyChanged
             ShortcutCommand.Raise();
             OpenGameFolderCommand.Raise();
             RaiseUpdateButton();
-            foreach (string name in new[] { nameof(Folder), nameof(FolderText), nameof(FolderMessage), nameof(FolderMessageVisible), nameof(CanPlay), nameof(ReadySummary), nameof(ReadyAllGood), nameof(GameChip), nameof(StatusText), nameof(TitleText), nameof(BuildDetail), nameof(LanguagesDetail), nameof(FolderSize), nameof(ChecksText), nameof(ContentsText), nameof(StatusLine), nameof(PlayLabel), nameof(GameRunning), nameof(NoBackups), nameof(HasBackups), nameof(SaveText), nameof(LanguageIndex), nameof(JaAvailable), nameof(EnAvailable), nameof(ZcAvailable), nameof(ZtAvailable), nameof(Fullscreen), nameof(VSync), nameof(PromptsIndex), nameof(WindowSize), nameof(WindowSizeNote), nameof(ShortcutLabel), nameof(ShortcutText), nameof(CheckForUpdatesOnStart), nameof(UpdateCheckDescription), nameof(UpdateStatus), nameof(AvailableUpdate), nameof(UpdateOverlayTitle), nameof(UpdateVersionLine), nameof(UpdateReleaseTitle), nameof(UpdateNotes) })
+            foreach (string name in new[] { nameof(Folder), nameof(FolderText), nameof(FolderMessage), nameof(FolderMessageVisible), nameof(CanPlay), nameof(ReadySummary), nameof(ReadyAllGood), nameof(GameChip), nameof(StatusText), nameof(TitleText), nameof(BuildDetail), nameof(LanguagesDetail), nameof(FolderSize), nameof(ChecksText), nameof(ContentsText), nameof(StatusLine), nameof(PlayLabel), nameof(GameRunning), nameof(NoBackups), nameof(HasBackups), nameof(SaveText), nameof(LanguageIndex), nameof(JaAvailable), nameof(EnAvailable), nameof(ZcAvailable), nameof(ZtAvailable), nameof(Fullscreen), nameof(VSync), nameof(TrophyNotice), nameof(TrophySound), nameof(PromptsIndex), nameof(WindowSize), nameof(WindowSizeNote), nameof(ShortcutLabel), nameof(ShortcutText), nameof(CheckForUpdatesOnStart), nameof(UpdateCheckDescription), nameof(UpdateStatus), nameof(AvailableUpdate), nameof(UpdateOverlayTitle), nameof(UpdateVersionLine), nameof(UpdateReleaseTitle), nameof(UpdateNotes) })
             {
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
             }

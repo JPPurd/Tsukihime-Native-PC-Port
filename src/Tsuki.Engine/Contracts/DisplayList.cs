@@ -25,6 +25,14 @@ public enum DrawKind : byte
     /// its offscreen surfaces with a fill (package K7: the offscreen mask / scratch targets of the stage and the screen effects).
     /// </summary>
     Clear = 8,
+
+    /// <summary>
+    /// Where the things drawn last begin (v0.1.9; not a PS4 record, no texture, no vertices): the port's toast and the achievement notice, which the PS4 never
+    /// draws into the game's frame. The UI adds it only in a frame that draws one of them, once, right before the first; nothing after it belongs to the
+    /// picture. The executor keeps a copy of target 0 as it is here, and the next list that reads the previous frame at its head (a transition start's alpha
+    /// fill and captures) reads that copy instead, as do the screenshot key and the save thumbnails.
+    /// </summary>
+    OverlaysBegin = 16,
 }
 
 /// <summary>How a quad's fragment shader differs from the plain one (package K7; additive to the PS4 record set).</summary>

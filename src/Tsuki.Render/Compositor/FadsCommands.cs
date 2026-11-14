@@ -54,6 +54,9 @@ public static class Quads
         Target = target,
         Texture = TextureRef.ForCapture(surface),
     };
+
+    /// <summary>The mark before the port's overlays (<see cref="DrawKind.OverlaysBegin"/>; v0.1.9).</summary>
+    public static DrawCmd OverlaysBegin() => new() { Kind = DrawKind.OverlaysBegin };
 }
 
 /// <summary>The commands of <c>_FADS(type, ms, rule)</c> (compositing 7).</summary>

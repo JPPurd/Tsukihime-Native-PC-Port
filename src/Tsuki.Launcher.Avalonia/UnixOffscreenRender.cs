@@ -1,30 +1,59 @@
+using System.Runtime.InteropServices;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Avalonia.Threading;
+using Tsuki.Launcher.Avalonia.Views;
 using Tsuki.Launcher.Core;
 
 namespace Tsuki.Launcher.Avalonia;
 
 /// <summary>
-/// --render DIR: every page, then the question, a toast, the footer's gold button and the update overlay in its states, drawn offscreen to PNG files with the names
-/// the Windows launcher's render check uses (play.png, update_offer.png …), so that the two can be laid side by side. Nothing is asked of GitHub.
+/// --render DIR: every page, then the Achievements page's tabs and its end, the question, a toast, the footer's gold button and the update overlay in its states,
+/// drawn offscreen to PNG files with the names the Windows launcher's render check uses (play.png, update_offer.png …), so that the two can be laid side by side.
+/// The Achievements page is drawn once the icons of the earned achievements are made. Nothing is asked of GitHub.
 /// </summary>
 internal static class UnixOffscreenRender
 {
-    public static int Run(UnixLauncherModel model, string folder)
+    /// <param name="model">The launcher's model.</param>
+    /// <param name="folder">Where the PNG files go.</param>
+    /// <param name="size">The window's size; null for the size the launcher opens with.</param>
+    public static int Run(UnixLauncherModel model, string folder, (double Width, double Height)? size = null)
     {
         Directory.CreateDirectory(folder);
         AppBuilder.Configure<UnixLauncherApp>().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false }).UseSkia().SetupWithoutStarting();
         AvaloniaSynchronizationContext.InstallIfNeeded();
+        return Pages(model, folder, size);
+    }
+
+    /// <summary>
+    /// The pictures themselves, once Avalonia is set up (<see cref="Run"/> does that; a test's session has done it). A refresh one of whose steps failed
+    /// ends the check with 1 and a line on the error stream before the first picture, as the error itself ended it before the refresh caught it. An error
+    /// the launcher reported after that (the window coming to the front) ends it with 1 and such a line after the last picture (Program.ReportedFailure).
+    /// </summary>
+    internal static int Pages(UnixLauncherModel model, string folder, (double Width, double Height)? size)
+    {
         var window = new MainWindow(model);
+        if (size is { } wanted) { (window.Width, window.Height) = wanted; }
         Wait(model.RefreshAsync());
+        if (Program.RefreshFailure(model) is { } failure)
+        {
+            Console.Error.WriteLine("RENDER FAIL: " + failure);
+            return 1;
+        }
+
         window.Show();
         foreach (LauncherPage page in Enum.GetValues<LauncherPage>())
         {
             model.Page = page;
+            // the icons of the earned achievements are made once the page is shown: the pictures show them, not the blank tiles that stand in meanwhile
+            if (page == LauncherPage.Achievements) { Wait(model.AchievementIconWork); }
             Draw(window, folder, page.ToString().ToLowerInvariant());
         }
 
+        DrawAchievementsPage(window, model, folder);
         model.Page = LauncherPage.Saves;
         Task question = model.ImportAsync("savedata000");
         Draw(window, folder, "confirm");
@@ -64,7 +93,97 @@ internal static class UnixOffscreenRender
         Draw(window, folder, "update_failed");
         model.PreviewUpdateState(UnixUpdateStage.Hidden, null, string.Empty);
         window.Close();
+        if (Program.ReportedFailure(model) is { } reported)
+        {
+            Console.Error.WriteLine("RENDER FAIL: " + reported);
+            return 1;
+        }
+
         return 0;
+    }
+
+    /// <summary>
+    /// The Achievements page is longer than the window: its list, its two other tabs, and its end (the last rows; the switches are on the first picture, under
+    /// the summary), as achievements_list.png, achievements_earned.png, achievements_locked.png and achievements_end.png in <paramref name="folder"/>.
+    /// </summary>
+    internal static void DrawAchievementsPage(MainWindow window, UnixLauncherModel model, string folder)
+    {
+        model.Page = LauncherPage.Achievements;
+        Wait(model.AchievementIconWork);
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        if (window.PageHost.Content is not AchievementsPage achievements) { return; }
+        achievements.Scroll.Offset = new Vector(0, achievements.ListCard.Bounds.Top);
+        Draw(window, folder, "achievements_list");
+        model.AchievementTabIndex = 1;
+        Draw(window, folder, "achievements_earned");
+        model.AchievementTabIndex = 2;
+        Draw(window, folder, "achievements_locked");
+        model.AchievementTabIndex = 0;
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        achievements.Scroll.ScrollToEnd();
+        Draw(window, folder, "achievements_end");
+    }
+
+    /// <summary>How many times <see cref="Frame"/> lets the window's jobs run and forces a frame before it takes the picture (an animation never runs out of them).</summary>
+    private const int SettleRounds = 10;
+
+    /// <summary>How many pictures <see cref="Frame"/> takes at most, waiting for two in a row that are the same.</summary>
+    private const int FrameTakes = 20;
+
+    /// <summary>The pause between two of those pictures: time for a worker's result to reach the window's jobs.</summary>
+    private static readonly TimeSpan FramePause = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>
+    /// The window as it is now, drawn. One CaptureRenderedFrame is not enough: Avalonia hands the compositor a change only once the batch before it was drawn,
+    /// and the one frame it forces draws the batch already waiting. So after two changes with nothing drawn between them the picture is a step old. Whether
+    /// something was drawn between them depended on the window's own render timer (1/60 s, run between the window's jobs once it is due): in the smallest
+    /// window with nothing earned, achievements_end.png (the All tab chosen, then the page scrolled to its end) showed the All tab at the scroll the Earned tab
+    /// had left in some runs and not in others. Here the jobs run and a frame is forced again for as long as a frame leaves jobs behind (the drawn batch's end,
+    /// then the change it held back), and pictures are taken a moment apart until two in a row are the same; a window that keeps moving (an animation that
+    /// never ends) gives its last one.
+    /// </summary>
+    internal static WriteableBitmap Frame(TopLevel window)
+    {
+        WriteableBitmap? last = null;
+        byte[]? lastPixels = null;
+        for (int take = 0; take < FrameTakes; take++)
+        {
+            if (take > 0) { Thread.Sleep(FramePause); }
+            Settle(window);
+            WriteableBitmap frame = window.GetLastRenderedFrame() ?? throw new InvalidOperationException("The headless renderer returned no frame.");
+            byte[] pixels = Pixels(frame);
+            bool same = lastPixels is not null && pixels.AsSpan().SequenceEqual(lastPixels);
+            last?.Dispose();
+            (last, lastPixels) = (frame, pixels);
+            if (same) { break; }
+        }
+
+        return last!;
+    }
+
+    /// <summary>Runs the window's jobs, lays it out and forces a frame, again while that frame left jobs behind (at most <see cref="SettleRounds"/> times).</summary>
+    private static void Settle(TopLevel window)
+    {
+        for (int round = 0; round < SettleRounds; round++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            // SystemIdle is the lowest priority RunJobs runs
+            if (!Dispatcher.UIThread.HasJobsWithPriority(DispatcherPriority.SystemIdle)) { return; }
+        }
+    }
+
+    private static byte[] Pixels(WriteableBitmap frame)
+    {
+        using ILockedFramebuffer locked = frame.Lock();
+        int row = ((locked.Size.Width * locked.Format.BitsPerPixel) + 7) / 8;
+        byte[] pixels = new byte[row * locked.Size.Height];
+        for (int y = 0; y < locked.Size.Height; y++) { Marshal.Copy(locked.Address + (y * locked.RowBytes), pixels, y * row, row); }
+        return pixels;
     }
 
     private static void Wait(Task task)
@@ -80,10 +199,8 @@ internal static class UnixOffscreenRender
 
     private static void Draw(MainWindow window, string folder, string name)
     {
-        Dispatcher.UIThread.RunJobs();
-        window.UpdateLayout();
         string path = Path.Combine(folder, name + ".png");
-        using var frame = window.CaptureRenderedFrame() ?? throw new InvalidOperationException("The headless renderer returned no frame.");
+        using WriteableBitmap frame = Frame(window);
         frame.Save(path);
         Console.WriteLine(path);
     }

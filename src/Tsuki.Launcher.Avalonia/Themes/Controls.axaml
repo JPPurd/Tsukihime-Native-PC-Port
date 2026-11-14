@@ -1,4 +1,5 @@
-<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" x:Class="Tsuki.Launcher.Avalonia.Themes.Controls">
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:Tsuki.Launcher.Avalonia"
+        x:Class="Tsuki.Launcher.Avalonia.Themes.Controls">
   <!-- The Windows launcher's styles (src/Tsuki.Launcher/Themes/Theme.xaml), control by control. Text takes its colour and font from the window, so that a list
        item's colour reaches its label. -->
 
@@ -72,6 +73,22 @@
           <StackPanel VerticalAlignment="Center" Margin="0,12,24,12">
             <TextBlock Text="{TemplateBinding Header}" Classes="RowTitle"/>
             <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Classes="Muted" Margin="0,3,0,0"/>
+          </StackPanel>
+          <ContentPresenter Grid.Column="1" Content="{TemplateBinding Content}" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+          <Rectangle Grid.ColumnSpan="2" Height="1" Fill="{StaticResource DividerBrush}" VerticalAlignment="Bottom"/>
+        </Grid>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+  <!-- the same row, tighter (class Compact beside SettingRow): 8 px above and below the words instead of 12, 2 between them, and no least height. For a card
+       that must fit a small window: the Achievements page's NOTIFY card, as the Windows launcher's CompactSettingRow (D8 P-2, D10 Q-3) -->
+  <Style Selector="HeaderedContentControl.SettingRow.Compact">
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel VerticalAlignment="Center" Margin="0,8,24,8">
+            <TextBlock Text="{TemplateBinding Header}" Classes="RowTitle"/>
+            <TextBlock Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" Classes="Muted" Margin="0,2,0,0"/>
           </StackPanel>
           <ContentPresenter Grid.Column="1" Content="{TemplateBinding Content}" VerticalAlignment="Center" HorizontalAlignment="Right"/>
           <Rectangle Grid.ColumnSpan="2" Height="1" Fill="{StaticResource DividerBrush}" VerticalAlignment="Bottom"/>
@@ -283,7 +300,7 @@
     <Setter Property="Cursor" Value="Hand"/>
     <Setter Property="Template">
       <ControlTemplate>
-        <Grid Height="44" Margin="12,2" Background="Transparent">
+        <Grid x:Name="Row" Margin="12,2" Background="Transparent">
           <Border x:Name="Bg" CornerRadius="8" Background="Transparent" BorderThickness="1" BorderBrush="Transparent"/>
           <Border x:Name="Bar" Width="3" Height="22" CornerRadius="2" HorizontalAlignment="Left" Background="{StaticResource AccentVerticalBrush}" Opacity="0" BoxShadow="0 0 10 0 #CC5E8BFF"/>
           <StackPanel Orientation="Horizontal" Margin="18,0,0,0" VerticalAlignment="Center">
@@ -295,6 +312,13 @@
         </Grid>
       </ControlTemplate>
     </Setter>
+  </Style>
+  <!-- 44 high; 40 in a short window (class Compact, set by the window), where the eight entries would not fit otherwise -->
+  <Style Selector="ListBox.Nav ListBoxItem /template/ Grid#Row">
+    <Setter Property="Height" Value="44"/>
+  </Style>
+  <Style Selector="ListBox.Nav.Compact ListBoxItem /template/ Grid#Row">
+    <Setter Property="Height" Value="40"/>
   </Style>
   <Style Selector="ListBox.Nav ListBoxItem:pointerover /template/ Border#Bg">
     <Setter Property="Background" Value="#0DFFFFFF"/>
@@ -322,13 +346,16 @@
     <Setter Property="BorderBrush" Value="{StaticResource MoonPaleBrush}"/>
   </Style>
 
-  <!-- ===== a segmented choice (language, prompts, window size) ===== -->
+  <!-- ===== a segmented choice (language, prompts, window size, the Achievements tabs) ===== -->
   <Style Selector="ListBox.Segmented">
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Padding" Value="0"/>
+    <!-- every choice is always on show: a list that brought its chosen one into view scrolled the page down to itself when the page opened in a short window -->
+    <Setter Property="AutoScrollToSelectedItem" Value="False"/>
     <Setter Property="ItemsPanel">
-      <ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate>
+      <!-- equal cells that the arrow keys and Home / End move through (a plain UniformGrid gives the list no way to) -->
+      <ItemsPanelTemplate><local:NavigableUniformGrid Rows="1"/></ItemsPanelTemplate>
     </Setter>
     <Setter Property="Template">
       <ControlTemplate>
@@ -375,8 +402,10 @@
     <Setter Property="Background" Value="Transparent"/>
     <Setter Property="BorderThickness" Value="0"/>
     <Setter Property="Padding" Value="0"/>
+    <Setter Property="AutoScrollToSelectedItem" Value="False"/>
     <Setter Property="ItemsPanel">
-      <ItemsPanelTemplate><UniformGrid Rows="1"/></ItemsPanelTemplate>
+      <!-- equal cells that the arrow keys and Home / End move through (a plain UniformGrid gives the list no way to) -->
+      <ItemsPanelTemplate><local:NavigableUniformGrid Rows="1"/></ItemsPanelTemplate>
     </Setter>
     <Setter Property="Template">
       <ControlTemplate>

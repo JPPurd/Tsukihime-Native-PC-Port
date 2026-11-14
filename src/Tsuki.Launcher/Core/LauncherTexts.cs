@@ -2,6 +2,7 @@
 // from here, so that the two copies of the pages cannot drift apart ("1 thing need attention"). Only plain text and plain data: no WPF or Avalonia types.
 using System.Reflection;
 using Tsuki.Engine.Contracts;
+using Tsuki.Engine.Trophies;
 
 namespace Tsuki.Launcher.Core;
 
@@ -138,7 +139,7 @@ public static class LauncherTexts
         return (
             "Restore this backup?",
             $"save.dat will be replaced by the backup of {backup.Created.ToString("d MMM yyyy, HH:mm", System.Globalization.CultureInfo.InvariantCulture)} ({backup.Save.Describe()}). " +
-            "Your current save is backed up first, so you can undo this. Settings are kept as they are.",
+            "Your current save is backed up first, so you can undo this. Settings are kept as they are. Achievements are kept too, and the backup's are added to them.",
             "Restore");
     }
 
@@ -147,6 +148,138 @@ public static class LauncherTexts
         "Import this PS4 save?",
         $"{Path.GetFileName(imagePath)} is read (the file itself is never changed). Its slots and system data replace save.dat; your current save is backed up first.",
         "Import");
+
+    // -- the Achievements page (v0.1.9) -------------------------------------------------------------------------------
+    // Every word here is the port's own. The names of the 27 chapter achievements are the game's chapter titles, read from the player's game folder at run time;
+    // the names below stand in for them when there is no game folder. No official trophy name or description is in this file.
+
+    /// <summary>The page's name: its sidebar entry and its heading.</summary>
+    public const string AchievementsTitle = "Achievements";
+
+    /// <summary>The line under the page's heading.</summary>
+    public const string AchievementsDescription = "The game's 30 achievements, its PS4 trophies. Play to earn them; progress already in your saves counts too.";
+
+    /// <summary>The gold line over the page's heading, as on every page: the page's name in capitals.</summary>
+    public const string AchievementsOverline = "ACHIEVEMENTS";
+
+    /// <summary>The page's heading.</summary>
+    public const string AchievementsHeading = "What you have earned";
+
+    /// <summary>The summary card's small capitals.</summary>
+    public const string AchievementsProgressCaps = "PROGRESS";
+
+    /// <summary>The switch card's small capitals.</summary>
+    public const string AchievementsNoticeCaps = "NOTIFY";
+
+    /// <summary>The link beside the note that asks for a game folder: it opens the Game files page (that page's sidebar name).</summary>
+    public const string AchievementsOpenGameFiles = "Game files";
+
+    /// <summary>The Earned tab while nothing is earned.</summary>
+    public const string AchievementsNothingEarned = "Nothing earned yet. Play the story and your achievements appear here.";
+
+    /// <summary>The Locked tab once everything is earned.</summary>
+    public const string AchievementsNothingLocked = "Nothing is locked any more: you have earned every achievement.";
+
+    /// <summary>A grade's count under its emblem on the summary card: "3 / 21".</summary>
+    public static string AchievementGradeCount(int earned, int total) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{earned} / {total}");
+
+    /// <summary>The tab that lists every achievement.</summary>
+    public const string AchievementsTabAll = "All";
+
+    /// <summary>The tab that lists the earned ones.</summary>
+    public const string AchievementsTabEarned = "Earned";
+
+    /// <summary>The tab that lists the ones still to earn.</summary>
+    public const string AchievementsTabLocked = "Locked";
+
+    /// <summary>A tab's label with its count: "Earned (12)".</summary>
+    public static string AchievementsTab(string name, int count) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{name} ({count})");
+
+    /// <summary>The label of the notice's switch row (settings.ini <c>trophy_notice</c>, off until the player turns it on).</summary>
+    public const string AchievementsNoticeLabel = "Notify in the game";
+
+    /// <summary>What the notice's switch does.</summary>
+    public const string AchievementsNoticeDescription = "Shows a short message at the top right of the game when you earn an achievement. Achievements are recorded whether it is on or off.";
+
+    /// <summary>The label of the sound's switch row, under the notice's (settings.ini <c>trophy_sound</c>, off until the player turns it on).</summary>
+    public const string AchievementsSoundLabel = "Sound when notified";
+
+    /// <summary>What the sound's switch does.</summary>
+    public const string AchievementsSoundDescription = "Plays a soft chime with the message. Needs \"Notify in the game\" to be on.";
+
+    /// <summary>Where the record is kept.</summary>
+    public const string AchievementsFileNote =
+        "Achievements are kept in " + TrophyLog.FileName + " beside your saves and are part of every backup on the Saves page. Restoring an older save or importing a PS4 save never removes one.";
+
+    /// <summary>Shown when the record could not be read.</summary>
+    public const string AchievementsDamagedNote = TrophyLog.FileName + " could not be read, so only what your saves show is listed here, without dates.";
+
+    /// <summary>Shown when the names and the icons could not be read from a game folder.</summary>
+    public const string AchievementsNoGameNote =
+        "Choose your game folder (Game files) to see the chapter names and the icons cut from your own game's pictures, and to count the chapters your saves have already finished.";
+
+    /// <summary>"12 of 30 earned".</summary>
+    public static string AchievementCount(int earned, int total) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{earned} of {total} earned");
+
+    /// <summary>"40%".</summary>
+    public static string AchievementPercent(int percent) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{percent}%");
+
+    /// <summary>A grade's word: "Platinum", "Gold", "Silver", "Bronze".</summary>
+    public static string AchievementGrade(TrophyGrade grade) => grade switch
+    {
+        TrophyGrade.Platinum => "Platinum",
+        TrophyGrade.Gold => "Gold",
+        TrophyGrade.Silver => "Silver",
+        _ => "Bronze",
+    };
+
+    /// <summary>The state of an achievement that is not earned.</summary>
+    public const string AchievementLocked = "Locked";
+
+    /// <summary>The state of an achievement earned at a time nobody recorded (progress made before achievements existed).</summary>
+    public const string AchievementEarned = "Earned";
+
+    /// <summary>The state of an achievement earned at a known time, in local time: "12 Nov 2026, 14:03".</summary>
+    public static string AchievementEarnedAt(DateTime earnedUtc) =>
+        (earnedUtc.Kind == DateTimeKind.Local ? earnedUtc : DateTime.SpecifyKind(earnedUtc, DateTimeKind.Utc).ToLocalTime())
+        .ToString("d MMM yyyy, HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The name of an achievement when the game folder gives none: always for 0, 28 and 29 (the game has no chapter title for them), and for the chapter
+    /// achievements 1..27 while no game folder is set.
+    /// </summary>
+    public static string AchievementFallbackName(int id) => id switch
+    {
+        TrophyTable.Platinum => "All Achievements",
+        >= 1 and <= 4 => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Day {id}"),
+        >= 5 and <= 13 => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Arcueid's route, day {id}"),
+        14 => "Arcueid's route, the last day",
+        >= 15 and <= 23 => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Ciel's route, day {id - 10}"),
+        24 => "Ciel's route, day 14 (first path)",
+        25 => "Ciel's route, day 14 (second path)",
+        26 => "Ciel's route, first ending",
+        27 => "Ciel's route, second ending",
+        TrophyTable.FirstLesson => "First Lesson",
+        TrophyTable.AllLessons => "Every Lesson",
+        _ => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Achievement {id}"),
+    };
+
+    /// <summary>How an achievement is earned, in one line (empty for an id that is not 0..29).</summary>
+    public static string AchievementDetail(int id) => id switch
+    {
+        TrophyTable.Platinum => "Earn every other achievement.",
+        >= 1 and <= 4 => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Finish day {id}."),
+        >= 5 and <= 13 => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Finish day {id} on Arcueid's route."),
+        14 => "Finish Arcueid's route.",
+        >= 15 and <= 23 => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"Finish day {id - 10} on Ciel's route."),
+        24 => "Finish day 14 on Ciel's route, on the way to its first ending.",
+        25 => "Finish day 14 on Ciel's route, on the way to its second ending.",
+        26 => "Reach the first ending of Ciel's route.",
+        27 => "Reach the second ending of Ciel's route.",
+        TrophyTable.FirstLesson => "Attend one of Ciel's lessons.",
+        TrophyTable.AllLessons => "Attend all 25 of Ciel's lessons.",
+        _ => string.Empty,
+    };
 
     // -- updates ------------------------------------------------------------------------------------------------------
 

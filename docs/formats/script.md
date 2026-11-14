@@ -526,7 +526,7 @@ layer > 0x27) [E]. Coordinates: 4.5.
 | RDED (O) | 550 | (n) | 0x9813B | m | If n is the current scene and visited, sets bit n of the persistent "scene completed" set (VA 0x164C620+0x258) (VA 0xB7E40). [E] |
 | ATSV | 398 | ([n]) | 0x95F5D | m | Auto-save point; `ATSV(1)` comes right before 80 of the 83 story choice blocks (the other 3 have conditional `_SELR`s in between), `ATSV()` elsewhere. [H strong: name, position; E: history snapshot + save helpers] |
 | WTSV (O) | 28 | () | 0x9AF36 | y | Wait for the save to finish (before chapter-title movies). [H] |
-| TRPY | 1 | (n) | 0x96FC3 | c | Unlock trophy n (`_TRPY(28)` in QACALL); calls VA 0xEC080, the same routine the title code calls with 0x1C. [E call; H strong] |
+| TRPY | 1 | (n) | 0x96FC3 | c | Unlock trophy n (`_TRPY(28)` in QACALL); calls VA 0xEC080, the same routine the title code calls with 0x1C. While F[24] != 0 (a replay) only n == 0x1D is passed on. [E call and filter; H strong] |
 | XSTP / XRSM | 2 / 2 | () | 0x965E5 / 0x96E52 | c | System state change 0xB,0x24 / resume (VA 0x5C380 / 0x5C6C0); used around one scene of CIEL13_7B. [E calls; H meaning] |
 | DMMY | 71 | (anything) | - | | Disabled statement (compiler-commented): no-op. [E, D] |
 | NOP_ | 1 | () | - | | no-op. [E] |

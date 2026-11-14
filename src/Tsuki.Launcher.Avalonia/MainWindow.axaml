@@ -12,14 +12,14 @@
     <Grid x:Name="ContentArea" ColumnDefinitions="250,*">
       <Border Background="{StaticResource SidebarBrush}" BorderBrush="{StaticResource DividerBrush}" BorderThickness="0,0,1,0">
         <DockPanel>
-          <!-- hidden in a short window (a Steam Deck at 150 %), where the seven pages need the whole height -->
+          <!-- hidden in a short window (a Steam Deck at 150 %), where the eight pages need the whole height (MainWindow.FitSidebar) -->
           <StackPanel x:Name="SidebarNote" DockPanel.Dock="Bottom" Margin="26,0,20,22">
             <Rectangle Classes="GoldDivider" Margin="0,0,0,14"/>
             <TextBlock Text="{Binding LauncherVersion}" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
             <TextBlock Text="Fan-made. Not affiliated with TYPE&#x2011;MOON." Foreground="#6C7699" FontSize="11" Margin="0,4,0,0" TextWrapping="Wrap"/>
           </StackPanel>
           <StackPanel>
-            <Grid Margin="26,34,16,0" Height="50">
+            <Grid x:Name="SidebarLogo" Margin="26,34,16,0" Height="50">
               <Viewbox Width="46" Height="46" HorizontalAlignment="Left" VerticalAlignment="Center">
                 <Canvas Width="44" Height="44">
                   <Path x:Name="Crescent" Fill="{StaticResource AccentVerticalBrush}" Data="{StaticResource CrescentGeometry}" Canvas.Left="1" Canvas.Top="1">

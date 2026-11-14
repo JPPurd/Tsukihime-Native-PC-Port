@@ -128,6 +128,8 @@ public static class SaveFile
     /// <summary>
     /// Writes the store to <paramref name="path"/> atomically: the bytes go to a temporary file in the same folder, are
     /// flushed to disk, and replace the old file in one step; the previous generation stays as <c>path + ".bak"</c>.
+    /// A write that fails throws and leaves the old file and no temporary file. The one exception is a replace that stopped after it gave the old file the
+    /// backup's name, when the new file cannot be moved into place either: its temporary file stays beside the backup for <see cref="FinishInterruptedCommit"/>.
     /// </summary>
     public static void WriteAtomic(string path, SaveStore store)
     {
@@ -137,6 +139,7 @@ public static class SaveFile
         string dir = Path.GetDirectoryName(full)!;
         Directory.CreateDirectory(dir);
         string tmp = Path.Combine(dir, Path.GetFileName(full) + "." + Guid.NewGuid().ToString("N")[..8] + ".tmp");
+        bool replacing = false;
         try
         {
             using (var fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -147,19 +150,183 @@ public static class SaveFile
 
             if (File.Exists(full))
             {
-                File.Replace(tmp, full, full + ".bak", ignoreMetadataErrors: true);
+                replacing = true;       // (the temporary file is a whole save now, flushed and closed)
+                ReplaceKeepingBackup(tmp, full);
             }
             else
             {
+                BeforeRename?.Invoke(tmp, full);
                 File.Move(tmp, full);
             }
         }
         catch
         {
-            TryDelete(tmp);
+            // A replace that stopped half way gave the old file the backup's name and did not bring the new one (Windows documents that failure): no save file
+            // is there, and the temporary file is the only copy of the newest generation. It takes the name, which is the step that was missing, and the commit
+            // is written. When that move is refused too, the temporary file stays beside the backup, where the next start finishes the commit
+            // (FinishInterruptedCommit, which needs the backup), and this commit fails with the replace's own error. Every other failure removes it, as before,
+            // also the move of a commit that found no save file (nothing was replaced there, and the move is not tried again).
+            bool keep = false;
+            if (replacing && !File.Exists(full) && !Directory.Exists(full))
+            {
+                try
+                {
+                    BeforeRename?.Invoke(tmp, full);
+                    File.Move(tmp, full);
+                    return;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    keep = File.Exists(full + ".bak");
+                }
+            }
+
+            if (!keep)
+            {
+                TryDelete(tmp);
+            }
+
             throw;
         }
     }
+
+    // how long a commit on Windows keeps trying its replace while somebody has the file or its backup open
+    private const int ReplaceMilliseconds = 200;
+
+    // The new file takes the old one's place and the old one becomes the backup: File.Replace. On Windows that step is refused while anybody has the backup open,
+    // whatever sharing the holder asked for ("Unable to remove the file to be replaced"; the file, its backup and the temporary file stay as they were), and a
+    // reader that opened the file one commit ago holds what is the backup now. A reader has it only for its read, so the step is tried again for a moment.
+    // When the holder does not let go, the temporary file is moved over the file instead: one rename, which never leaves the name without a file and changes
+    // nothing when it is refused (measured; a File.Replace without a backup name goes through under more holders, but takes the old file away before it
+    // brings the new one). The held backup then stays one generation older until the next commit. The move is refused while the file itself is open elsewhere
+    // too: then the commit fails with the replace's own error, as it always did. Elsewhere nobody's open file stops a replace: one try, as before.
+    private static void ReplaceKeepingBackup(string tmp, string full)
+    {
+        string backup = full + ".bak";
+        if (!OperatingSystem.IsWindows())
+        {
+            Replace(tmp, full, backup);
+            return;
+        }
+
+        long start = Environment.TickCount64;
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Replace(tmp, full, backup);
+                return;
+            }
+            catch (IOException) when (File.Exists(tmp) && File.Exists(full))
+            {
+                if (Environment.TickCount64 - start < ReplaceMilliseconds)
+                {
+                    // the first tries follow each other closely (the moment a reader lets go is the one to catch); the later ones are a millisecond apart
+                    if (attempt < 16)
+                    {
+                        Thread.SpinWait(200);
+                        Thread.Yield();
+                    }
+                    else
+                    {
+                        Thread.Sleep(1);
+                    }
+
+                    continue;
+                }
+
+                try
+                {
+                    File.Move(tmp, full, overwrite: true);
+                    return;
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                {
+                    // the replace's refusal is the one to report
+                }
+
+                throw;
+            }
+        }
+    }
+
+    private static void Replace(string tmp, string full, string backup)
+    {
+        BeforeRename?.Invoke(tmp, full);
+        File.Replace(tmp, full, backup, ignoreMetadataErrors: true);
+    }
+
+    /// <summary>
+    /// For the tests, which cannot make a real replace stop half way: called with the temporary file and the save file before a commit's replace (each try),
+    /// before the move of a commit that found no save file, and before the move that follows a replace that stopped half way. What it throws is that step's
+    /// failure. Nothing else sets it.
+    /// </summary>
+    internal static Action<string, string>? BeforeRename { get; set; }
+
+    /// <summary>
+    /// Finishes a commit that was cut off between its two renames. On Windows the replace of <see cref="WriteAtomic"/> first gives the old file the backup's name
+    /// and then the new file the file's (measured: a reader looking in between finds no file). A process that ends there (killed, a crash, the power) leaves
+    /// no save file, the previous generation as the backup, and the newest generation, whole and flushed, under its temporary name; the next start then found
+    /// "no save file", began a new profile, and its second commit wrote that profile over the backup. Only when <paramref name="path"/> is not there and its
+    /// backup is: the newest temporary file of a commit that is a whole save and not older than the backup takes the file's name, which is the rename that
+    /// was missing. The backup and every other file stay as they are. With no such file nothing is done (a save file that was simply removed is a new
+    /// profile, as before), and so without the backup, which the first of the two renames always leaves: a temporary file an earlier commit left behind is
+    /// then no save to bring back, whatever its age. Nothing is thrown for a file or a folder that cannot be read. For the program that owns the profile only
+    /// (the game at its start, which holds the profile's guard), never for a reader: while a commit is under way its files look like this for an instant.
+    /// </summary>
+    /// <param name="path">The save file.</param>
+    /// <returns>The temporary file that is the save file now, or null when nothing was done.</returns>
+    public static string? FinishInterruptedCommit(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        try
+        {
+            string full = Path.GetFullPath(path);
+            string? dir = Path.GetDirectoryName(full);
+            var bak = new FileInfo(full + ".bak");       // one look: that it is there, and when it was written
+            if (dir is null || File.Exists(full) || Directory.Exists(full) || !bak.Exists)
+            {
+                return null;
+            }
+
+            // a temporary file older than the backup is not that commit's: a commit ended while it waited for a held backup leaves one too, beside its save file
+            string name = Path.GetFileName(full);
+            DateTime backup = bak.LastWriteTimeUtc;
+            foreach (string tmp in Directory.EnumerateFiles(dir, name + ".*.tmp")
+                .Where(f => IsCommitTemporary(Path.GetFileName(f), name))
+                .Select(f => (File: f, Written: File.GetLastWriteTimeUtc(f)))
+                .Where(f => f.Written >= backup)
+                .OrderByDescending(f => f.Written)
+                .Select(f => f.File)
+                .ToList())
+            {
+                try
+                {
+                    FromBytes(ReadAndClose(tmp).Span);
+                }
+                catch (SaveFormatException)
+                {
+                    continue;       // not a whole save (a commit cut off while it wrote): the next one
+                }
+
+                File.Move(tmp, full);
+                return tmp;
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // a folder that cannot be listed, a file that cannot be read or moved: nothing was done, as before
+        }
+
+        return null;
+    }
+
+    // the name WriteAtomic gives its temporary file: the save file's name, a dot, eight hexadecimal digits, ".tmp" (not the launcher's "save.dat.restore.tmp")
+    private static bool IsCommitTemporary(string file, string name) =>
+        file.Length == name.Length + 13
+        && file.StartsWith(name + ".", StringComparison.OrdinalIgnoreCase)
+        && file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+        && file.AsSpan(name.Length + 1, 8).IndexOfAnyExcept("0123456789abcdefABCDEF") < 0;
 
     /// <summary>
     /// SaveImage_Commit: copies G[0..499] of the interpreter's variables into the system data, then writes the file
@@ -186,6 +353,12 @@ public static class SaveFile
     public static SaveStore Read(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);
+        return FromBytes(ReadToEnd(stream).Span);
+    }
+
+    // every byte from the stream's position to its end; more than any valid save holds is refused
+    private static ReadOnlyMemory<byte> ReadToEnd(Stream stream)
+    {
         if (stream.CanSeek && stream.Length - stream.Position > MaxFileBytes)
         {
             throw new SaveFormatException("the file is larger than any valid save");
@@ -204,7 +377,7 @@ public static class SaveFile
             ms.Write(chunk, 0, n);
         }
 
-        return FromBytes(ms.GetBuffer().AsSpan(0, (int)ms.Length));
+        return ms.GetBuffer().AsMemory(0, (int)ms.Length);
     }
 
     /// <summary>Parses the bytes of a save file.</summary>
@@ -338,7 +511,23 @@ public static class SaveFile
     }
 
     /// <summary>
-    /// Reads a save file; when it is damaged, tries the previous generation (<c>path + ".bak"</c>).
+    /// Opens a save file for reading the way every reader must (v0.1.9): the handle shares reading, writing and deleting, so that a reader never stands in the way
+    /// of the writer. <see cref="WriteAtomic"/> replaces the file in one step (<c>File.Replace</c>), and on Windows that step fails while another handle is open
+    /// without the delete share: a launcher that read save.dat with <c>File.OpenRead</c> at the moment of the game's commit made the commit fail. A reader that
+    /// holds this handle through a replace keeps reading the file it opened, whole. Hold it only for the read itself: the file it opened becomes the backup, and
+    /// on Windows a handle still open at the commit after that one keeps the backup from being replaced (that commit waits a moment for the reader, then leaves
+    /// the backup one generation older).
+    /// </summary>
+    /// <param name="path">The save file, or its backup.</param>
+    public static FileStream OpenForReading(string path)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+    }
+
+    /// <summary>
+    /// Reads a save file; when it is damaged, tries the previous generation (<c>path + ".bak"</c>). The files are opened with <see cref="OpenForReading"/> and
+    /// closed again before anything is parsed.
     /// </summary>
     /// <param name="path">The save file.</param>
     /// <param name="usedBackup">True when the backup was read.</param>
@@ -356,15 +545,13 @@ public static class SaveFile
 
         try
         {
-            using FileStream stream = File.OpenRead(path);
-            return Read(stream);
+            return FromBytes(ReadAndClose(path).Span);
         }
         catch (SaveFormatException primary) when (File.Exists(backup))
         {
             try
             {
-                using FileStream stream = File.OpenRead(backup);
-                SaveStore store = Read(stream);
+                SaveStore store = FromBytes(ReadAndClose(backup).Span);
                 usedBackup = true;
                 return store;
             }
@@ -375,6 +562,23 @@ public static class SaveFile
             }
         }
     }
+
+    // The bytes of a save file. The handle is closed before anything is parsed: a reader has the file only for the read itself (OpenForReading), and checking
+    // and unpacking a save takes far longer than reading it.
+    private static ReadOnlyMemory<byte> ReadAndClose(string path)
+    {
+        ReadOnlyMemory<byte> bytes;
+        using (FileStream stream = OpenForReading(path))
+        {
+            bytes = ReadToEnd(stream);
+        }
+
+        ReadAndClosed?.Invoke(path);
+        return bytes;
+    }
+
+    /// <summary>For the tests: called with the path once a reading has a save file's bytes and has closed the file, before it parses them.</summary>
+    internal static Action<string>? ReadAndClosed { get; set; }
 
     private static void ValidateSystem(SystemBlock system, bool checkLatestSlot = true)
     {

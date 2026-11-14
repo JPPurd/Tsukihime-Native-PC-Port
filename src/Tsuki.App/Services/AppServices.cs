@@ -34,6 +34,12 @@ public sealed class AppServicesParts
     /// <summary>The clock for slot dates.</summary>
     public Func<DateTime>? Now { get; init; }
 
+    /// <summary>
+    /// The milliseconds clock that spaces the saves' retries of an achievements file that could not be written (<see cref="AppServices.TrophyRetryMilliseconds"/>);
+    /// null: <see cref="Environment.TickCount64"/>.
+    /// </summary>
+    public Func<long>? Milliseconds { get; init; }
+
     /// <summary>The language of a fresh profile.</summary>
     public Language InitialLanguage { get; init; } = Language.En;
 
@@ -69,6 +75,9 @@ public sealed partial class AppServices : IGameServices
         }
 
         FlowMarksRepaired = RepairFlowMarks(parts.Data, vars);
+
+        // the achievements the save's progress has already earned (v0.1.9); after the repair, which can add scene_done bits to an old profile
+        StartTrophies(parts, vars);
 
         var profile = new GameProfile(Store.SystemData.Block, vars);
         IReadOnlyList<Language> available = AvailableLanguagesOf(parts.Data);
@@ -175,6 +184,7 @@ public sealed partial class AppServices : IGameServices
         sink.AutoSaved += () => Commit();
         sink.SceneStackPushed += () => Commit();
         host.SavePromptAccepted += () => SaveScreenRequested?.Invoke();
+        AttachTrophies(host);
     }
 
     // The sound model asks is_playing inside the host's step: the script's OpenHandle + Play of a voice are queued in the host, and EndOfVoice asks a few
@@ -267,6 +277,7 @@ public sealed partial class AppServices : IGameServices
     public void Tick()
     {
         _frame++;
+        TellTrophyCatchUp();
         TickAudio();
     }
 
@@ -285,10 +296,17 @@ public sealed partial class AppServices : IGameServices
     /// <summary>
     /// Writes the save file (system data, config, G words, slots). Errors are logged, not thrown; the result says whether the file was written (a save or
     /// quick save whose commit failed reports failure to the player, package R1), and the first failure raises <see cref="SaveFailed"/> with the path and
-    /// the operating system's words. Without a save file (<c>--no-save</c>) nothing is written and the result is true.
+    /// the operating system's words. Without a save file (<c>--no-save</c>) nothing is written and the result is true. An achievements file whose write failed is
+    /// tried again first, once <see cref="TrophyRetryMilliseconds"/> have passed since it last failed.
     /// </summary>
-    public bool Commit()
+    public bool Commit() => Commit(quitting: false);
+
+    /// <summary>The last save of a run (the quit): as <see cref="Commit()"/>, and an achievements file whose write failed is tried again however recently it failed.</summary>
+    public bool CommitAtQuit() => Commit(quitting: true);
+
+    private bool Commit(bool quitting)
     {
+        RetryTrophyWrite(now: quitting);
         if (_parts.SavePath is not { } path)
         {
             return true;

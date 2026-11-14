@@ -421,9 +421,6 @@ internal sealed class GalleryCgPanel : GalleryPanel
         return true;
     }
 
-    /// <summary>The thumbnail frame: the first frame of the sheet (231 x 130; four-frame sheets stack their frames).</summary>
-    private static RectF ThumbSource => new(0, 0, 231, 130);
-
     /// <inheritdoc/>
     public override void Draw(UiPainter p, float alpha, bool focused)
     {
@@ -461,7 +458,7 @@ internal sealed class GalleryCgPanel : GalleryPanel
             }
 
             GalleryCg cg = sub is { } g ? Host.Model.Groups[g][_unlocked[g][list[k]]] : Host.Model.Groups[list[k]][_unlocked[list[k]][0]];
-            p.Sprite(GallerySheets.CgThumb(cg.Row.Thumbnail), ThumbSource, rc);
+            p.Sprite(GallerySheets.CgThumb(cg.Row.Thumbnail), cg.ThumbSource(p.Assets.Language), rc);           // a language-strip picture's sheet stacks a frame per language
             if (k == cursor)
             {
                 var at = new RectF(rc.X - 8f, rc.Y - 6f, 248f, 144f);
@@ -724,8 +721,9 @@ internal sealed class GalleryCgViewer : UiScreen
 
         (float w, float h) = (Math.Max(cg.Row.Width, 1), Math.Max(cg.Row.Height, 1));
         (RectF rect, _, _) = Geometry(w, h, zoom, pan);
-        float strip = cg.LanguageStrip ? (int)Ctx.Language : 0;
-        p.Picture(pic, new RectF(cg.Row.X, cg.Row.Y + (cg.Row.Height * strip), w, h), rect, alpha);
+
+        // a language-strip picture stores its four strips a tile-rounded height apart (the catalog's band stride), not its height apart
+        p.Picture(pic, cg.Source(Ctx.Language), rect, alpha);
     }
 
     /// <inheritdoc/>

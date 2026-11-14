@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Tsuki.Data;
 using Tsuki.Engine.Contracts;
+using Tsuki.Launcher.Core;
 
 namespace Tsuki.Launcher;
 
@@ -137,6 +138,39 @@ public static class LauncherArt
         var cropped = new CroppedBitmap(bitmap, new Int32Rect(minX, minY, maxX - minX + 1, maxY - minY + 1));
         cropped.Freeze();
         return cropped;
+    }
+
+    /// <summary>The largest side of a picture of the Achievements page (its icons, tiles and emblems are 240 x 240).</summary>
+    public const int MaxIconSide = 1024;
+
+    /// <summary>
+    /// A picture of the Achievements page (v0.1.9): an achievement's icon, a tile or a grade's emblem, straight-alpha RGBA, as a frozen premultiplied bitmap. It
+    /// reads only its argument and makes a frozen object, so it is called on a worker thread; the bitmap is then the window's to show.
+    /// </summary>
+    /// <exception cref="ArgumentException">The pixels are not Size x Size x 4 bytes.</exception>
+    public static BitmapSource IconBitmap(AchievementIcon icon)
+    {
+        ArgumentNullException.ThrowIfNull(icon);
+        int side = icon.Size;
+        byte[] rgba = icon.Rgba;
+        if (side < 1 || side > MaxIconSide || rgba.Length != side * side * 4)
+        {
+            throw new ArgumentException("an icon is Size x Size x 4 bytes", nameof(icon));
+        }
+
+        byte[] bgra = new byte[rgba.Length];
+        for (int i = 0; i < rgba.Length; i += 4)
+        {
+            int a = rgba[i + 3];
+            bgra[i] = (byte)(((rgba[i + 2] * a) + 127) / 255);
+            bgra[i + 1] = (byte)(((rgba[i + 1] * a) + 127) / 255);
+            bgra[i + 2] = (byte)(((rgba[i] * a) + 127) / 255);
+            bgra[i + 3] = (byte)a;
+        }
+
+        BitmapSource bitmap = BitmapSource.Create(side, side, 96, 96, PixelFormats.Pbgra32, null, bgra, side * 4);
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private static (byte[] Pixels, int Width, int Height) BoxReduce(byte[] src, int w, int h, int factor)

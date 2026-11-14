@@ -43,7 +43,9 @@ and its tests (`tests/Tsuki.Tests.Avalonia`). The build commands below use Windo
   Never build with `-p:TsukiPersonalIcon=...` for anything that leaves your machine ([personal builds](https://github.com/Take00C/Tsukihime-Native-PC-Port/blob/main/docs/PUBLISHING.md#14-personal-builds-never-go-out-package-k28)).
 - Tests: `dotnet test tests\Tsuki.Tests.Synthetic` needs no game. `tests\Tsuki.Tests.Data` and
   `tests\Tsuki.Tests.Render` run against your own copy and skip, with the reason, when the environment
-  variable `TSUKI_GAME_DIR` does not name the `CUSA47999` folder; the Render tests open a hidden window.
+  variable `TSUKI_GAME_DIR` does not name the `CUSA47999` folder; the Render tests open hidden windows, except
+  `UploadTimingTests`, which shows a window on the desktop for a few seconds (leave it out with
+  `--filter "FullyQualifiedName!~UploadTimingTests"`).
   `dotnet test tests\Tsuki.Tests.Avalonia` checks the Unix launcher headlessly and also runs on Windows.
   Avalonia builds send no build telemetry: the root `Directory.Build.targets` switches it off, and CI also
   sets `AVALONIA_TELEMETRY_OPTOUT=1`.

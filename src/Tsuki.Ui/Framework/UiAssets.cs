@@ -162,6 +162,17 @@ public sealed class UiAssets
     /// <summary>The composed picture <paramref name="id"/> of <paramref name="language"/> (the texture providers resolve a key by its own language).</summary>
     public UiComposedPicture? Composed(int id, Language language)
     {
+        if (UiComposedId.IsTrophyEmblem(id))
+        {
+            // the port's own pictures, the same in every language; answered before the composer, which would run again on every call for an id it does not store
+            return TrophyEmblem((Tsuki.Engine.Trophies.TrophyGrade)(id - UiComposedId.TrophyEmblemFirst));
+        }
+
+        if (UiComposedId.IsTrophyIcon(id))
+        {
+            return Volatile.Read(ref _icons[id - UiComposedId.TrophyIconFirst]);
+        }
+
         if (_composed.TryGetValue((id, language), out UiComposedPicture? pic))
         {
             return pic;
@@ -170,6 +181,52 @@ public sealed class UiAssets
         BuildComposed(language);
         return _composed.GetValueOrDefault((id, language));
     }
+
+    // the four emblems, made once in a process (on first use, on whichever thread asks first) and shared by every UI: they depend on nothing
+    private static readonly UiComposedPicture?[] Emblems = new UiComposedPicture?[4];
+
+    /// <summary>
+    /// The emblem of a trophy grade for the achievement notice (v0.1.9; <see cref="UiComposedId.TrophyEmblem"/>): the trophy cup the port draws on the icons' tile
+    /// (<see cref="Tsuki.Data.Trophies.TrophyIconArt.Emblem"/>) at the icons' size, <see cref="UiTrophyNotice.IconSize"/>. No game data and no file is read: it is
+    /// drawn the first time it is asked for, in a millisecond or two, and kept. It stands in for an icon that cannot be made.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The grade is not one of the four.</exception>
+    public static UiComposedPicture TrophyEmblem(Tsuki.Engine.Trophies.TrophyGrade grade)
+    {
+        int slot = UiComposedId.TrophyEmblem(grade) - UiComposedId.TrophyEmblemFirst;
+        if (Volatile.Read(ref Emblems[slot]) is { } made)
+        {
+            return made;
+        }
+
+        const int Size = UiTrophyNotice.IconSize;
+        var picture = new UiComposedPicture(Size, Size, Tsuki.Data.Trophies.TrophyIconArt.Emblem(grade, Size));
+        return Interlocked.CompareExchange(ref Emblems[slot], picture, null) ?? picture;
+    }
+
+    private readonly UiComposedPicture?[] _icons = new UiComposedPicture?[Tsuki.Engine.Trophies.TrophyTable.Count];
+    private readonly bool[] _iconSettled = new bool[Tsuki.Engine.Trophies.TrophyTable.Count];
+
+    /// <summary>
+    /// Stores the icon of trophy <paramref name="id"/> (0..29) for the achievement notice (v0.1.9; <see cref="UiComposedId.TrophyIcon"/>): the host cuts it from
+    /// the player's own pictures, on any thread. Null says "settled, there is none": the notice then draws the grade's emblem. Either way <see cref="TrophyIconSettled"/>
+    /// is true afterwards. A later call replaces the picture. The language switch keeps it.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The id is not a trophy's.</exception>
+    public void SetTrophyIcon(int id, UiComposedPicture? picture)
+    {
+        if ((uint)id >= (uint)_icons.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(id), id, "not a trophy id");
+        }
+
+        // the picture first: whoever sees "settled" finds the picture that settled it
+        Volatile.Write(ref _icons[id], picture);
+        Volatile.Write(ref _iconSettled[id], true);
+    }
+
+    /// <summary>True once <see cref="SetTrophyIcon"/> was called for trophy <paramref name="id"/>: its icon is there, or the host said there is none. False for an id that is no trophy's.</summary>
+    public bool TrophyIconSettled(int id) => (uint)id < (uint)_iconSettled.Length && Volatile.Read(ref _iconSettled[id]);
 
     private void BuildComposed(Language language)
     {

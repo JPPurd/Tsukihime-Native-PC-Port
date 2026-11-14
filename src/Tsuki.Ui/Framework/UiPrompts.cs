@@ -498,13 +498,40 @@ internal static class UiPrompts
 
     // ---- the port's own rows (package K21) --------------------------------------------------------------------------------------------------------------
 
-    /// <summary>The heading of the Screenshot Notice row (System tab, package K24): the short "Screenshot saved" toast after F12. Two lines in Japanese (the one-line word ran up to the Off pill).</summary>
+    /// <summary>
+    /// The heading of the Screenshot Notify row (System tab, package K24; "Screenshot Notice" until v0.1.9, the owner chose "Notify"): the short "Screenshot saved"
+    /// toast after F12. Two lines in Japanese (the one-line word ran up to the Off pill).
+    /// </summary>
     public static string ScreenshotNoticeHeading(Language language) => language switch
     {
         Language.Ja => "スクリーンショット^通知",
         Language.Zc => "截图提示",
         Language.Zt => "螢幕截圖通知",
-        _ => "Screenshot Notice",
+        _ => "Screenshot Notify",
+    };
+
+    /// <summary>
+    /// The heading of the Achievement Notify row (System tab, v0.1.9): the notice at the top right when an achievement is earned. Under the Screenshot Notify row, the
+    /// other notice the port shows. Japanese and Chinese keep their words (通知 / 提示 already mean notify).
+    /// </summary>
+    public static string TrophyNoticeHeading(Language language) => language switch
+    {
+        Language.Ja => "実績の通知",
+        Language.Zc => "成就提示",
+        Language.Zt => "成就通知",
+        _ => "Achievement^Notify",
+    };
+
+    /// <summary>
+    /// The heading of the Achievement Sound row (System tab, v0.1.9), right under the notice's row: the short chime as an achievement's notice comes in. Two lines in
+    /// English, as the notice's row has; in the other languages "the sound of the achievement notice" in a few characters the font pages have.
+    /// </summary>
+    public static string TrophySoundHeading(Language language) => language switch
+    {
+        Language.Ja => "実績の通知音",
+        Language.Zc => "成就提示音",
+        Language.Zt => "成就通知音",
+        _ => "Achievement^Sound",
     };
 
     /// <summary>The heading of the Copy Text to Clipboard row (System tab); the English one takes two lines (<c>^</c>), as the sheet's own long labels do, so that it ends before the pills at x 728.</summary>
@@ -572,6 +599,15 @@ internal static class UiPrompts
         return drawer.InkSpan(text, style).Right;
     }
 
+    /// <summary>How many lines <see cref="DrawText"/> lays <paramref name="text"/> out in with the same arguments (the layout breaks a line that runs past 1800 px).</summary>
+    public static int TextLines(UiPainter p, string text, double scale = 0.4, bool translated = true)
+    {
+        ArgumentNullException.ThrowIfNull(p);
+        UiText drawer = translated ? p.LabelText : p.KeyText;
+        TextStyle style = KeyStyle with { Sx = scale, Sy = scale * (448.0 / 360.0), Colour = TextStyle.White };
+        return drawer.Layout(text, style).NLines;
+    }
+
     /// <summary>Draws one option of the setting row as a pill: selected options are filled, the hovered one has a brighter border.</summary>
     public static void DrawPill(UiPainter p, string text, RectF r, bool selected, bool hover, float alpha, bool translated = false)
     {
@@ -590,8 +626,8 @@ internal static class UiPrompts
         DrawLabel(p, text, r.X + (r.W / 2f), r.Y + (r.H / 2f), alpha, TextStyle.White, 0.36, translated);
     }
 
-    /// <summary>Draws a label whose left edge is <paramref name="x"/> and whose vertical centre is <paramref name="cy"/>.</summary>
-    public static void DrawText(UiPainter p, string text, float x, float cy, float alpha, double scale = 0.4, bool translated = true)
+    /// <summary>Draws a label whose left edge is <paramref name="x"/> and whose vertical centre is <paramref name="cy"/>; <paramref name="colour"/> is an RGB565 word (white unless given).</summary>
+    public static void DrawText(UiPainter p, string text, float x, float cy, float alpha, double scale = 0.4, bool translated = true, int colour = TextStyle.White)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -599,7 +635,7 @@ internal static class UiPrompts
         }
 
         UiText drawer = translated ? p.LabelText : p.KeyText;
-        TextStyle style = KeyStyle with { Sx = scale, Sy = scale * (448.0 / 360.0), Colour = TextStyle.White };
+        TextStyle style = KeyStyle with { Sx = scale, Sy = scale * (448.0 / 360.0), Colour = colour };
         float th = drawer.Height(text, style) * UiMetrics.UnitY;
         drawer.Draw(p, text, style, x / UiMetrics.UnitX, (cy - (th / 2f) + Fudge) / UiMetrics.UnitY, alpha);
     }

@@ -34,6 +34,12 @@ public sealed record LauncherPaths(string DataDirectory)
     /// <summary>The PC port's settings.</summary>
     public string SettingsFile => Path.Combine(DataDirectory, "settings.ini");
 
+    /// <summary>
+    /// The record of earned achievements (v0.1.9): the game writes it. The launcher reads it, and writes it only in a restore or an import of a save while no
+    /// game runs (<see cref="Achievements.KeepBeforeSaveChange"/>, <see cref="Achievements.UniteBackupRecord"/>).
+    /// </summary>
+    public string TrophiesFile => Path.Combine(DataDirectory, Tsuki.Engine.Trophies.TrophyLog.FileName);
+
     /// <summary>The game folder the game remembers (<c>--game</c> or this file).</summary>
     public string GameDirFile => Path.Combine(DataDirectory, "game_dir.txt");
 

@@ -254,7 +254,13 @@ char* alias[4]` (NULL-padded). The cGallery constructor inserts `std::map<string
 Four-frame names (RELRO 0x4051E0, 11 x char*): IMG1699, 1700, 1701, 1702, 1736, 1737, 2581,
 3819, 3821, 3822, 4026. Their CG_TH children are the only 231x520 ones (four 231x130 frames);
 the other 1,968 are 231x130 [V-all]. The thumbnail (0x1BC4C..) and viewer (0x1C3B0) pass
-"is one of these" to 0x33230 [H: frame animation].
+"is one of these" to 0x33230 [E call; the helper is not decoded].
+
+They are language strips: the picture holds ja, en, zc and zt bands at the band stride of
+images.md 8.1 (the row's height rounded up to whole 254-row tiles: IMG2581 and IMG4026 are 1080
+rows high and stored 4 x 1270), and the four thumbnail frames are the same languages in that order
+[V: decode of the pictures and sheets, renders]. The port shows the game language's band and frame
+(`GalleryCg.Source`, `ThumbSource`); a stride of the height alone showed English 190 rows low.
 
 ### 4.2 Thumbnails [E, V-all]
 
@@ -576,9 +582,10 @@ QA_08 151, QA_09 319, QA_10 170, QA_11 171 (Arcueid route), QA_13 190, QA_14 321
 257/250, QA_16 328, QA_17 283, QA_18 285, QA_19 288, QA_20 291, QA_21 304, QA_22 308 (Ciel
 route); full list in `ending_list.csv`.
 
-Trophy hook 0xB7CC0 (after any scene_done): scenes 533..557 all done -> trophy 0x1D; else, if
-F[24] == 0, a scene listed in text 0x221400 (27 x `{scene, -1}`) -> trophy (index + 1)
-[E; trophies P3].
+Trophy hook 0xB7CC0(n) (after scene_done(n)): for a lesson n (533..557), scenes 533..557 all done
+-> trophy 0x1D, with no F[24] test, and nothing else is tested; for any other n, if F[24] == 0 and n
+is listed in text 0x221400 (27 x `{scene, -1}`) and done -> trophy (index + 1) [E]. The port's
+rules are `TrophyRules` (src/Tsuki.Engine/Trophies).
 
 ---
 

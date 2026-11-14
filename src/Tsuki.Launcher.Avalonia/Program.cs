@@ -3,7 +3,8 @@
 //   TsukihimeLauncher [--game DIR] [--data DIR]          the launcher window; one per profile (--data, else the user's profile folder)
 //   --after-update PID --updated-from X.Y.Z               given by an update to the launcher it restarts into: wait for the old one to end and for the profile's
 //                                                         lock, clean up, then say "Updated from" (as the Windows launcher, LauncherApp.xaml.cs)
-//   --render DIR                                          draws every page offscreen to PNG files and exits (verification mode)
+//   --render DIR [--size WxH]                             draws every page offscreen to PNG files and exits (verification mode); --size draws a window of
+//                                                         that size instead of 1200x780 (800x460 is the smallest: a Steam Deck's desktop at 150 %)
 //   --selftest [FILE] [--shots DIR]                       reads the folders like the window does and writes one line (verification mode, no window shown)
 //   --update-selftest [FILE] --update-api URL [--update-current X.Y.Z] [--shots DIR]
 //                                                         checks a loopback stand-in of GitHub, installs what it offers and restarts into the new launcher, which
@@ -12,6 +13,8 @@
 //                                                         window is up (verification mode, no window shown)
 //   --window-smoke native                                 the same on the real platform (a CI diagnostic for a hosted Mac: it loads libAvaloniaNative and shows the
 //                                                         window for half a second)
+// --render, --selftest and --update-selftest end with 1 and say "the refresh failed: ..." when a step of reading the folders failed, and "the launcher reported
+// an error: ..." at their end when it reported another error while they ran (the window only reports either).
 using System.Diagnostics;
 using System.Globalization;
 using Avalonia;
@@ -31,6 +34,8 @@ internal static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // before anything can load a font library, in every mode: the launcher's own HarfBuzz binds to itself (OwnHarfBuzz says why)
+        OwnHarfBuzz.BindFirst();
         string? data = Option(args, "--data");
         string? game = Option(args, "--game");
         string? updateApi = Option(args, "--update-api");
@@ -45,7 +50,7 @@ internal static class Program
         if (current is not null && ReleaseVersion.TryParse(current, out ReleaseVersion version)) { model.CurrentVersionOverride = version; }
         if (render is not null)
         {
-            return UnixOffscreenRender.Run(model, render);
+            return UnixOffscreenRender.Run(model, render, WindowSize(Option(args, "--size")));
         }
 
         if (args.Contains("--selftest") || args.Contains("--update-selftest"))
@@ -172,9 +177,32 @@ internal static class Program
         }
     }
 
-    private static int SelfTest(UnixLauncherModel model, string? report, string? shots, ReleaseVersion? updatedFrom)
+    /// <summary>
+    /// What a verification mode says of a refresh one of whose steps failed; null after a refresh without an error. The window reports such an error and goes
+    /// on (UnixLauncherModel.RefreshAsync). A verification mode stops there and ends with 1, as the error itself ended it (exit 134) before the refresh caught
+    /// it: otherwise --selftest said "SELFTEST PASS" over a launcher_crash.log in a profile nobody reads. The error's stack is in that log.
+    /// </summary>
+    internal static string? RefreshFailure(UnixLauncherModel model) =>
+        model.RefreshError is { } error ? "the refresh failed: " + error.GetType().Name + ": " + error.Message : null;
+
+    /// <summary>
+    /// What a verification mode says at its end when the launcher reported an error nothing caught while the mode ran (UnixLauncherModel.ReportCrash counts
+    /// them): the first one's type and message; null when it reported none. The window coming to the front reports what goes wrong there and goes on
+    /// (MainWindow.BackInFront), and the modes show a window for their pictures: such an error ended them (exit 134) before it was caught there, and since
+    /// then they ended with 0 over a launcher_crash.log in a profile nobody reads. A failed refresh is said at the refresh (<see cref="RefreshFailure"/>).
+    /// </summary>
+    internal static string? ReportedFailure(UnixLauncherModel model) =>
+        model.ReportedErrors > 0 && model.FirstReportedError is { } first ? "the launcher reported an error: " + first.GetType().Name + ": " + first.Message : null;
+
+    internal static int SelfTest(UnixLauncherModel model, string? report, string? shots, ReleaseVersion? updatedFrom)
     {
         Pump(model.RefreshAsync());
+        if (RefreshFailure(model) is { } failure)
+        {
+            Report(report, "SELFTEST FAIL: " + failure);
+            return 1;
+        }
+
         if (updatedFrom is { } from) { model.SayUpdated(from); }
         string result = $"SELFTEST PASS: {model.NavItems.Count} pages, {model.UpdateButtonLabel}, {model.ReadySummary}, launcher {model.CurrentVersion.Tag}";
         if (updatedFrom is not null) { result += "; " + model.UpdateStatus; }
@@ -186,13 +214,25 @@ internal static class Program
             window.Close();
         }
 
+        if (ReportedFailure(model) is { } reported)
+        {
+            Report(report, "SELFTEST FAIL: " + reported);
+            return 1;
+        }
+
         Report(report, result);
         return 0;
     }
 
-    private static int UpdateSelfTest(UnixLauncherModel model, LauncherPaths paths, string? report, string? shots)
+    internal static int UpdateSelfTest(UnixLauncherModel model, LauncherPaths paths, string? report, string? shots)
     {
         Pump(model.RefreshAsync());
+        if (RefreshFailure(model) is { } failure)
+        {
+            Report(report, "UPDATE SELFTEST FAIL: " + failure);
+            return 1;
+        }
+
         MainWindow? window = null;
         if (shots is not null)
         {
@@ -222,6 +262,12 @@ internal static class Program
         // drawn once the update's work is over (the new launcher waits for this one to end): a frame drawn inside the restart could be the one before it
         if (window is not null) { Shot(window, shots!, updated ? "2_update_restarting" : "2_update_failed"); }
         window?.Close();
+        if (ReportedFailure(model) is { } reported)
+        {
+            Report(report, "UPDATE SELFTEST FAIL: " + reported);
+            return 1;
+        }
+
         Report(report, $"{(updated ? "UPDATE SELFTEST PASS" : "UPDATE SELFTEST FAIL")}: {model.UpdateButtonLabel}; {model.UpdateStatus}; {model.UpdateMessage}");
         return updated ? 0 : 1;
     }
@@ -239,12 +285,11 @@ internal static class Program
         task.GetAwaiter().GetResult();
     }
 
+    /// <summary>The window as it is now, in <paramref name="folder"/> as <paramref name="name"/>.png (taken as the render check takes its pictures).</summary>
     private static void Shot(MainWindow window, string folder, string name)
     {
-        Dispatcher.UIThread.RunJobs();
-        window.UpdateLayout();
         Directory.CreateDirectory(folder);
-        using var frame = window.CaptureRenderedFrame() ?? throw new InvalidOperationException("The headless renderer returned no frame.");
+        using var frame = UnixOffscreenRender.Frame(window);
         frame.Save(Path.Combine(folder, name + ".png"));
     }
 
@@ -291,6 +336,17 @@ internal static class Program
         yield return pid.ToString(CultureInfo.InvariantCulture);
         yield return "--updated-from";
         yield return from.ToString();
+    }
+
+    /// <summary>"800x460" as a window size; null for anything else.</summary>
+    internal static (double Width, double Height)? WindowSize(string? text)
+    {
+        string[] parts = (text ?? string.Empty).Split('x', 'X');
+        return parts.Length == 2
+            && int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out int width) && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out int height)
+            && width is >= 1 and <= 8192 && height is >= 1 and <= 8192
+            ? (width, height)
+            : null;
     }
 
     private static string? Option(string[] args, string name)

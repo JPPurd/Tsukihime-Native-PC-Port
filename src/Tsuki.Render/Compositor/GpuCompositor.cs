@@ -76,6 +76,12 @@ public sealed class CompositorCounters
     /// <summary>Capture copies (display-list record type 6).</summary>
     public int Captures { get; internal set; }
 
+    /// <summary>Copies of the frame where its overlays began (<see cref="DrawKind.OverlaysBegin"/>; v0.1.9).</summary>
+    public int CleanCopies { get; internal set; }
+
+    /// <summary>Times that copy was put back into the frame at the head of the next list (v0.1.9).</summary>
+    public int CleanRestores { get; internal set; }
+
     internal void Reset()
     {
         Draws = 0;
@@ -84,6 +90,8 @@ public sealed class CompositorCounters
         Blits = 0;
         BlitPixels = 0;
         Captures = 0;
+        CleanCopies = 0;
+        CleanRestores = 0;
     }
 }
 
@@ -108,6 +116,12 @@ public sealed unsafe class GpuCompositor : IDisposable
     private readonly uint _samplerNearest;
     private int _vboCursor;
     private bool _disposed;
+
+    // v0.1.9: target 0 as the last list left it where its overlays began (the toast, the achievement notice). Made on first use, the frame's size, no texture of
+    // the cache; _cleanKept says that it still matches target 0 but for those overlays: everything a list draws after its mark is an overlay, and a new frame,
+    // a clear of target 0 and a load of it forget the copy
+    private RenderTarget? _cleanFrame;
+    private bool _cleanKept;
 
     /// <summary>Creates the frame target, the backdrop and the 27 programs.</summary>
     /// <param name="gl">Bindings of the current context.</param>
@@ -158,6 +172,18 @@ public sealed unsafe class GpuCompositor : IDisposable
     /// <summary>Target 0, the frame.</summary>
     public RenderTarget Frame => _targets[0];
 
+    /// <summary>
+    /// The frame as it was where the last list's overlays began (<see cref="DrawKind.OverlaysBegin"/>: the toast, the achievement notice; v0.1.9), or null when
+    /// that list drew none or target 0 has been cleared, loaded or begun again since. Target 0 itself holds the frame with them, as it is shown.
+    /// </summary>
+    public RenderTarget? CleanFrame => _cleanKept ? _cleanFrame : null;
+
+    /// <summary>
+    /// The frame as the player's pictures take it (the screenshot key, the save thumbnails): <see cref="CleanFrame"/> when the last list drew overlays, else
+    /// <see cref="Frame"/> (which then has none in it).
+    /// </summary>
+    public RenderTarget Picture => CleanFrame ?? Frame;
+
     /// <summary>The backdrop copy D of the blend shaders.</summary>
     public RenderTarget Backdrop { get; }
 
@@ -204,19 +230,57 @@ public sealed unsafe class GpuCompositor : IDisposable
         return t;
     }
 
-    /// <summary>Starts a frame: resets the counters and the vertex stream.</summary>
-    public void BeginFrame()
+    /// <summary>
+    /// Starts a frame: resets the counters and the vertex stream. The copy of the previous frame without its overlays (<see cref="CleanFrame"/>) no longer
+    /// matches target 0 once this frame draws: with <paramref name="restoreCleanFrame"/> it is first put back into target 0 (a list that reads the previous
+    /// frame at its head, v0.1.9), and it is forgotten either way.
+    /// </summary>
+    public void BeginFrame(bool restoreCleanFrame = false)
     {
         Counters.Reset();
         _gl.BindVertexArray(_vao);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
         _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(VboVertices * sizeof(GpuVertex)), null, BufferUsageARB.StreamDraw);
         _vboCursor = 0;
+        if (restoreCleanFrame && CleanFrame is { } clean)
+        {
+            Copy(clean, Frame);
+            Counters.CleanRestores++;
+        }
+
+        _cleanKept = false;
+        Bind(Frame);
+    }
+
+    /// <summary>
+    /// Copies target 0 into the clean-frame surface where the frame's overlays begin (<see cref="DrawKind.OverlaysBegin"/>; v0.1.9): until target 0 is
+    /// cleared, loaded or a new frame begins, <see cref="CleanFrame"/> is the frame without them. The surface is made on first use (the frame's size, about
+    /// 8 MB at 1920 x 1080) and is no texture of the cache. Only the first mark of a frame counts: a second one would copy the overlays drawn since.
+    /// </summary>
+    public void KeepCleanFrame()
+    {
+        if (_cleanKept)
+        {
+            return;
+        }
+
+        _cleanFrame ??= CreateTarget(Width, Height);
+        Copy(Frame, _cleanFrame);
+        _cleanKept = true;
+        Counters.CleanCopies++;
         Bind(Frame);
     }
 
     /// <summary>Clears a target to a colour (bytes / 255).</summary>
-    public void Clear(byte target, byte r, byte g, byte b, byte a) => ClearTarget(Target(target), r / 255f, g / 255f, b / 255f, a / 255f);
+    public void Clear(byte target, byte r, byte g, byte b, byte a)
+    {
+        if (target == 0)
+        {
+            _cleanKept = false;
+        }
+
+        ClearTarget(Target(target), r / 255f, g / 255f, b / 255f, a / 255f);
+    }
 
     /// <summary>
     /// Draws one quad. <paramref name="texture"/> = 0 draws an untextured fill (PS #3). The shader comes from the
@@ -374,21 +438,43 @@ public sealed unsafe class GpuCompositor : IDisposable
         Counters.Captures++;
     }
 
-    /// <summary>Scales the frame into the window's default framebuffer with 16:9 letterboxing (ARCHITECTURE 6.2).</summary>
-    public void Present(int windowWidth, int windowHeight)
+    /// <summary>
+    /// Scales the frame (or <paramref name="source"/>, a target of the frame's size) into the window's default framebuffer with 16:9 letterboxing
+    /// (ARCHITECTURE 6.2).
+    /// </summary>
+    public void Present(int windowWidth, int windowHeight, RenderTarget? source = null)
     {
+        RenderTarget from = source ?? Frame;
         _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, 0);
         _gl.Viewport(0, 0, (uint)Math.Max(1, windowWidth), (uint)Math.Max(1, windowHeight));
         _gl.Disable(EnableCap.ScissorTest);
         _gl.ClearColor(0, 0, 0, 1);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
-        float s = MathF.Min(windowWidth / (float)Width, windowHeight / (float)Height);
-        int w = (int)(Width * s), h = (int)(Height * s);
+        float s = MathF.Min(windowWidth / (float)from.Width, windowHeight / (float)from.Height);
+        int w = (int)(from.Width * s), h = (int)(from.Height * s);
         int x = (windowWidth - w) / 2, y = (windowHeight - h) / 2;
-        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, Frame.Fbo);
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, from.Fbo);
         // Frame row 0 is the top, the window's GL row 0 the bottom: flip while scaling.
-        _gl.BlitFramebuffer(0, 0, Width, Height, x, y + h, x + w, y, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
+        _gl.BlitFramebuffer(0, 0, from.Width, from.Height, x, y + h, x + w, y, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
         Bind(Frame);
+    }
+
+    /// <summary>
+    /// The picture of the screenshot key (package K21): the window's back buffer as <see cref="ReadWindow"/> reads it, but of <see cref="Picture"/>, the frame
+    /// without the overlays it drew last (v0.1.9: a list drawn before the key was pressed, which the loop held for its textures, still has the toast or the
+    /// notice in it). Call it after <see cref="Present"/> and before the swap; the back buffer holds the frame with its overlays again afterwards.
+    /// </summary>
+    public byte[] ReadPicture(int windowWidth, int windowHeight)
+    {
+        if (CleanFrame is not { } clean)
+        {
+            return ReadWindow(windowWidth, windowHeight);
+        }
+
+        Present(windowWidth, windowHeight, clean);
+        byte[] picture = ReadWindow(windowWidth, windowHeight);
+        Present(windowWidth, windowHeight);
+        return picture;
     }
 
     /// <summary>
@@ -451,6 +537,11 @@ public sealed unsafe class GpuCompositor : IDisposable
             throw new ArgumentException($"{rgba.Length} bytes for a {target.Width} x {target.Height} target", nameof(rgba));
         }
 
+        if (ReferenceEquals(target, Frame))
+        {
+            _cleanKept = false;
+        }
+
         _gl.BindTexture(TextureTarget.Texture2D, target.Texture);
         fixed (byte* p = rgba)
         {
@@ -502,7 +593,7 @@ public sealed unsafe class GpuCompositor : IDisposable
 
         _disposed = true;
         _programs.Dispose();
-        foreach (RenderTarget t in _targets.Values.Concat(_captures.OfType<RenderTarget>()).Append(Backdrop))
+        foreach (RenderTarget t in _targets.Values.Concat(_captures.OfType<RenderTarget>()).Append(Backdrop).Append(_cleanFrame).OfType<RenderTarget>())
         {
             _gl.DeleteFramebuffer(t.Fbo);
             _gl.DeleteTexture(t.Texture);
@@ -510,6 +601,8 @@ public sealed unsafe class GpuCompositor : IDisposable
 
         _targets.Clear();
         Array.Clear(_captures);
+        _cleanFrame = null;
+        _cleanKept = false;
         _gl.DeleteBuffer(_vbo);
         _gl.DeleteVertexArray(_vao);
         _gl.DeleteSampler(_samplerLinear);
@@ -530,6 +623,15 @@ public sealed unsafe class GpuCompositor : IDisposable
         _gl.Disable(EnableCap.ScissorTest);
         _gl.ClearColor(r, g, b, a);
         _gl.Clear(ClearBufferMask.ColorBufferBit);
+    }
+
+    // a whole target onto another of the same size (the clean frame and back)
+    private void Copy(RenderTarget src, RenderTarget dst)
+    {
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, src.Fbo);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, dst.Fbo);
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.BlitFramebuffer(0, 0, src.Width, src.Height, 0, 0, dst.Width, dst.Height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
     }
 
     private void CopyBackdrop(RenderTarget rt, int x0, int y0, int x1, int y1)

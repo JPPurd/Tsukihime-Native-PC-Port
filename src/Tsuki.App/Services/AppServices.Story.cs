@@ -394,6 +394,9 @@ public sealed partial class AppServices
         if (Host.BeginReplay(scriptScene))
         {
             StoryActive = true;
+
+            // a lesson started from the title's ending list earns the first-lesson achievement at once, before any script runs, as on the PS4 (v0.1.9)
+            Earn(_trophyRules.ReplayStarted(scriptScene));
         }
     }
 

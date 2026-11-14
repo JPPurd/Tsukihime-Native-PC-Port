@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using Tsuki.Launcher.Core;
 
@@ -60,6 +61,24 @@ public partial class MainWindow : Window
                 Activate();
             }
         };
+
+        // v0.1.9: the Achievements page follows the game while it runs. Every two seconds while the window is not minimised, and whenever it is activated or
+        // comes back from the taskbar, the model asks whether trophies.ini or save.dat changed (two file lookups) and reads them again only then.
+        var achievementsPoll = new DispatcherTimer(DispatcherPriority.Background) { Interval = LauncherModel.AchievementsPollInterval };
+        achievementsPoll.Tick += (_, _) => _ = model.PollAchievementsAsync();
+        Loaded += (_, _) => achievementsPoll.IsEnabled = WindowState != WindowState.Minimized;
+        Activated += (_, _) => _ = model.PollAchievementsAsync();
+        StateChanged += (_, _) =>
+        {
+            bool shown = WindowState != WindowState.Minimized;
+            if (shown && !achievementsPoll.IsEnabled && IsLoaded)
+            {
+                _ = model.PollAchievementsAsync();
+            }
+
+            achievementsPoll.IsEnabled = shown && IsLoaded;
+        };
+        Closed += (_, _) => achievementsPoll.Stop();
     }
 
     private readonly ImageSource _crescent;

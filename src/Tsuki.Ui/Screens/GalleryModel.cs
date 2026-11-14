@@ -10,8 +10,34 @@ namespace Tsuki.Ui.Screens;
 /// <param name="Category">The group's unlock category.</param>
 /// <param name="DirectSeen">The seen bit of the picture itself (names_sprites lookup), or -1 for a gallery-only picture.</param>
 /// <param name="AliasSeen">The seen bits of the alias pictures that unlock it (the first resolvable alias decides, earlier ones are tried with every size letter).</param>
-/// <param name="LanguageStrip">The picture stacks one strip per language: the source rectangle moves down by its height times the language.</param>
-public sealed record GalleryCg(int Group, int Index, GalleryCgRow Row, int Category, int DirectSeen, IReadOnlyList<int> AliasSeen, bool LanguageStrip);
+/// <param name="LanguageStrip">
+/// The picture stacks one strip per language (the 11 names of <see cref="IUiGalleryTables.CgLanguageStrips"/>): the source rectangle moves down by
+/// <see cref="BandStride"/> times the language, and the thumbnail shows the language's frame of the four its sheet stacks.
+/// </param>
+public sealed record GalleryCg(int Group, int Index, GalleryCgRow Row, int Category, int DirectSeen, IReadOnlyList<int> AliasSeen, bool LanguageStrip)
+{
+    /// <summary>The side of the thumbnail frames: 231 x 130 (a language-strip picture's thumbnail stacks four, 231 x 520, one per language, no rows between).</summary>
+    public const int ThumbWidth = 231;
+
+    /// <summary>The height of a thumbnail frame.</summary>
+    public const int ThumbHeight = 130;
+
+    /// <summary>
+    /// The rows from one language's strip to the next in the stored picture, 0 for a picture of one strip: the picture's height rounded up to whole rows of
+    /// the 254-pixel tiles, so that every strip starts on a tile row. It is the engine's band stride (<see cref="Tsuki.Data.Catalog.CatalogEntry.BandStride"/>,
+    /// docs/formats/images.md 8.1), and the four gallery-only strip pictures, which have no catalog record, are stored the same way: IMG2581 and IMG4026 are
+    /// 1080 rows high and 4 x 1270 stored, the whiteboards 2560 and 4 x 2794. A stride of the height alone shows them 190 or 234 rows too low.
+    /// </summary>
+    public int BandStride => LanguageStrip
+        ? (Math.Max(Row.Height, 1) + Tsuki.Data.Catalog.CatalogEntry.BandAlign - 1) / Tsuki.Data.Catalog.CatalogEntry.BandAlign * Tsuki.Data.Catalog.CatalogEntry.BandAlign
+        : 0;
+
+    /// <summary>The part of the stored picture the viewer shows in <paramref name="language"/>: the table's rectangle, in the language's strip.</summary>
+    public RectF Source(Language language) => new(Row.X, Row.Y + (BandStride * (LanguageStrip ? (int)language : 0)), Math.Max(Row.Width, 1), Math.Max(Row.Height, 1));
+
+    /// <summary>The part of the thumbnail sheet the grid shows in <paramref name="language"/>: its first frame, or the language's frame for a language-strip picture.</summary>
+    public RectF ThumbSource(Language language) => new(0, LanguageStrip ? ThumbHeight * (int)language : 0, ThumbWidth, ThumbHeight);
+}
 
 /// <summary>
 /// The unlock rules of the gallery, the music player, the movie list and the ending list (docs/formats/gallery.md 2.3, 4.3, 6.2, 7, 8) over the eboot tables

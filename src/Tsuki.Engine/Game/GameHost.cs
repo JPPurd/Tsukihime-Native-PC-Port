@@ -483,7 +483,10 @@ public sealed partial class GameHost : IHost
         }
     }
 
-    /// <summary>Raised by <c>_TRPY(n)</c> (trophy n; the platform layer decides what to do).</summary>
+    /// <summary>
+    /// Raised by <c>_TRPY(n)</c> (trophy n), for every call: the PS4 passes n on only outside a replay, or when n is 29. The listener applies that rule
+    /// (<see cref="Tsuki.Engine.Trophies.TrophyRules.ScriptRequest"/>) and decides what an earned trophy does.
+    /// </summary>
     public event Action<int>? TrophyUnlocked;
 
     private StepResult CmdUnknown(in Statement st)

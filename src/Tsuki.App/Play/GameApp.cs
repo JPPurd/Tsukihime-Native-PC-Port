@@ -185,6 +185,10 @@ internal sealed class GameApp : IDisposable
     private TextHookOutput? _hook;
     private TextWebSocketOutput? _webSocket;
     private Task<string?>? _iconTask;
+
+    // the longest a --fast run stands still for an achievement icon's worker (an icon takes some tens of milliseconds; a run must never hang on one)
+    private static readonly TimeSpan TrophyIconPatience = TimeSpan.FromSeconds(10);
+
     private bool _focused = true;
     private long _renderedFrame = -1;
     private Exception? _reportedFault;
@@ -244,7 +248,7 @@ internal sealed class GameApp : IDisposable
         {
             try
             {
-                log = LogFileWriter(new StreamWriter(path, false, new UTF8Encoding(false)) { AutoFlush = true }, path, OperatingSystem.IsWindows(), Console.Out);
+                log = LogFileWriter(new StreamWriter(path, false, new UTF8Encoding(false)) { AutoFlush = true }, path, Console.Out);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
             {
@@ -321,11 +325,11 @@ internal sealed class GameApp : IDisposable
     }
 
     /// <summary>
-    /// The writer of a <c>--log</c> file: on Windows the file itself, as in v0.1.6; on Linux and macOS the file with the console behind it, so that a write the disk
-    /// refuses (a full Steam Deck, a quota) drops the file and the game goes on.
+    /// The writer of a <c>--log</c> file: the file with the console behind it, so that a write, flush or close the disk refuses (a full drive, a quota) drops the
+    /// file and the game goes on. On Windows too since v0.1.9: until then Windows wrote the file itself, and a log line that could not be written ended a game
+    /// the launcher had started (its PLAY always names a log), with the failure path's own log line and the close of the log failing the same way.
     /// </summary>
-    internal static TextWriter LogFileWriter(TextWriter file, string path, bool windows, TextWriter console) =>
-        windows ? file : new TeeWriter(console, file, path, echo: false);
+    internal static TextWriter LogFileWriter(TextWriter file, string path, TextWriter console) => new TeeWriter(console, file, path, echo: false);
 
     /// <summary>The run log's name in the profile (the launcher's <c>LauncherPaths.LastRunLog</c>).</summary>
     internal const string LastRunLogName = "last_run.log";
@@ -967,7 +971,8 @@ internal sealed class GameApp : IDisposable
             }
         };
         var ui = new UiRoot(_source, _services, new DataParts(_source));
-        _runtime = new AppRuntime(_services, ui, _player, _movies);
+        // the achievement notice's chime (v0.1.9) is mixed with the game's sounds, at the sound-effect volume; a muted run (no sound device) only says it would have played
+        _runtime = new AppRuntime(_services, ui, _player, _movies) { Mixer = _mixer, Muted = _mute };
         _runtime.Logged += m => Say(m);
         if (_args.ExitAfterEnds > 0)
         {
@@ -984,7 +989,27 @@ internal sealed class GameApp : IDisposable
 
         _runtime.Grab = GrabThumbnail;
         _feeder.Thumbnails = _services.Thumbnail;
-        _feeder.Composed = key => ui.Context.Assets.Composed(key.A, (Language)key.B);       // the title's EXIT cell (package K33)
+        _feeder.Composed = key => ui.Context.Assets.Composed(key.A, (Language)key.B);       // the title's EXIT cell (package K33), the icons and emblems of the achievement notice (v0.1.9)
+
+        // the achievement notice (v0.1.9): never in a run that writes pictures on its own schedule (a route sweep, --shot-at, --shot-on-choice), so that those
+        // pictures do not change with what the run earns
+        _runtime.PictureRun = _args.SweepDir is not null || _shotAt.Count > 0 || _args.ShotOnChoice;
+
+        // the notice of one achievement shows that achievement's icon, cut from the player's own pictures: not at start but when the notice is asked for, on a
+        // worker of the runtime (the notice waits for it for at most three quarters of a second, then shows the grade's emblem, which the port draws; the trophy
+        // file of the game folder is never read). A verification run can ask for a game folder whose pictures give no icon (TSUKI_TROPHY_ICONS=none): the maker
+        // then answers "none" for every achievement
+        GameFolderSource iconSource = _source;
+        if (string.Equals(Environment.GetEnvironmentVariable("TSUKI_TROPHY_ICONS"), "none", StringComparison.OrdinalIgnoreCase))
+        {
+            _runtime.TrophyIconMaker = _ => null;
+            _log.WriteLine("achievement icons: none (TSUKI_TROPHY_ICONS=none): every message shows its grade's emblem");
+        }
+        else
+        {
+            _runtime.TrophyIconMaker = id => TrophyIcons.Notice(iconSource, id);
+        }
+
         _runtime.Start();
         if (_args.SweepDir is not null)
         {
@@ -1136,6 +1161,13 @@ internal sealed class GameApp : IDisposable
         {
             try
             {
+                // a commit cut off between its two renames (the game killed, a crash, the power) left no save file and the newest generation under its temporary
+                // name: without this the start found no save file and began a new profile, whose second commit wrote over the backup
+                if (SaveFile.FinishInterruptedCommit(_savePath) is { } finished)
+                {
+                    _log.WriteLine($"save file {_savePath} was not there: a save had been cut off before its end, and its file {Path.GetFileName(finished)} is the save file now");
+                }
+
                 store = SaveFile.ReadWithFallback(_savePath, out bool backup);
                 if (store is not null)
                 {
@@ -1354,6 +1386,9 @@ internal sealed class GameApp : IDisposable
             bool rendered = false;
             if (_args.Fast)
             {
+                // a fast run has no clock: the 45 frames an achievement notice waits for its icon would be over before the worker could finish, sooner or later
+                // with the machine's load. The worker is let finish instead, so that what a verification run shows and logs is the same on every machine
+                _runtime.WaitForTrophyIcons(TrophyIconPatience);
                 frame++;
                 StepOnce(new LogicTick(frame, Stopwatch.GetTimestamp()), list);
                 running = Render(list, ref stop);
@@ -1361,8 +1396,11 @@ internal sealed class GameApp : IDisposable
             }
             else
             {
+                // a pass behind the clock takes every step that is due (up to five after a slow frame); a verification run takes none past its --exit-after,
+                // which ends the run once the pass is done: it ends at the step it asked for, also on a busy machine (a pass after a slow frame took the run
+                // past it: --exit-after 101 ended at step 102)
                 long now = Stopwatch.GetTimestamp();
-                while (running && !_held && clock.TryNextTick(now, out LogicTick tick))
+                while (running && !_held && !ExitAfterReached && clock.TryNextTick(now, out LogicTick tick))
                 {
                     frame = tick.Frame;
                     StepOnce(tick, list);
@@ -1430,15 +1468,15 @@ internal sealed class GameApp : IDisposable
 
             while (_screenshots.TryTakeResult(out ScreenshotResult shot))
             {
-                // the thread pool wrote (or failed) a screenshot: the log, and the short toast in the player's language unless Config > System > Screenshot Notice is Off (package K24)
+                // the thread pool wrote (or failed) a screenshot: the log, and the short toast in the player's language unless Config > System > Screenshot Notify is Off (package K24)
                 bool notice = _port?.ScreenshotNotice ?? true;
                 if (shot.Saved)
                 {
-                    Say($"screenshot saved: {shot.Path} ({shot.Width} x {shot.Height}){(notice ? "" : " (notice off)")}");
+                    Say($"screenshot saved: {shot.Path} ({shot.Width} x {shot.Height}){(notice ? "" : " (no message: Screenshot Notify is off)")}");
                 }
                 else
                 {
-                    Say($"screenshot failed: {shot.Path}: {shot.Error}{(notice ? "" : " (notice off)")}");
+                    Say($"screenshot failed: {shot.Path}: {shot.Error}{(notice ? "" : " (no message: Screenshot Notify is off)")}");
                 }
 
                 if (notice)
@@ -1459,7 +1497,7 @@ internal sealed class GameApp : IDisposable
                 stop = "SIGTERM";
             }
 
-            if (running && _args.ExitAfter > 0 && _runtime.Frame >= _args.ExitAfter)
+            if (running && ExitAfterReached)
             {
                 running = false;
                 stop = $"exit-after {_args.ExitAfter}";
@@ -1489,7 +1527,7 @@ internal sealed class GameApp : IDisposable
         }
 
         _display?.SaveWindowSize();             // a size the player dragged the window to is the next start's (package K19)
-        _services.Commit();
+        _services.CommitAtQuit();               // the last save of the run: an achievements file that could not be written is tried again at once
         _terminate.Dispose();                   // saved: a SIGTERM from here ends the process at once again
         if (!_screenshots.WaitAll(ShutdownWait))
         {
@@ -1507,6 +1545,9 @@ internal sealed class GameApp : IDisposable
 
         return 0;
     }
+
+    // the run has taken the step its --exit-after names (0: no such limit)
+    private bool ExitAfterReached => StepLimit.Reached(_runtime.Frame, _args.ExitAfter);
 
     private readonly List<TextureRef> _lookAhead = [];
     private double _nextMemLog;
@@ -1711,6 +1752,20 @@ internal sealed class GameApp : IDisposable
                 Say($"gallery replay of scene {scene}");
             }
 
+            foreach (ScriptEntry e in _script.VerbsAt(_runtime.Frame, "trophy"))
+            {
+                // v0.1.9: the notice of achievement N through the path an earned one takes (the switch, the log line, the icon's worker, the queue); nothing is recorded
+                _runtime.ShowTrophy(int.TryParse(e.Argument, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int trophy) ? trophy : -1);
+            }
+
+            foreach (ScriptEntry e in _script.VerbsAt(_runtime.Frame, "trophies"))
+            {
+                // v0.1.9: the title's catch-up for N achievements found in a save's progress (trophies 1..N; 30 is all of them), through the path the start's own
+                // takes: it waits for the title's menu, then shows one short notice each
+                int count = int.TryParse(e.Argument, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int n) ? Math.Clamp(n, 0, 30) : 0;
+                _runtime.ShowTrophiesFound(count == 30 ? [.. Enumerable.Range(0, 30)] : [.. Enumerable.Range(1, count)]);
+            }
+
             foreach (ScriptEntry e in _script.VerbsAt(_runtime.Frame, "lang"))
             {
                 // the config screen's language radio, from a script: the same ConfigChanged call
@@ -1904,6 +1959,8 @@ internal sealed class GameApp : IDisposable
         bool story = _services.StoryActive && _runtime.Host.Phase == GamePhase.Running;
         if (!story || !_previousStory)
         {
+            // outside the story every frame starts black, and so does the first frame of a story (its transition start captures black); the copy of the last
+            // frame without its overlays goes with the clear (GpuCompositor.CleanFrame)
             _compositor.Clear(0, 0, 0, 0, 255);
         }
 
@@ -1915,10 +1972,12 @@ internal sealed class GameApp : IDisposable
         _compositor.Present(pw, ph);
         if (_shotPending)
         {
-            // the screenshot key (package K21): this fresh frame was drawn without the toast; the back buffer holds it letterboxed at the window's size
+            // the screenshot key (package K21): the frame letterboxed at the window's size, without the toast and the achievement notice. A frame drawn after the
+            // key leaves them out (HideToast); one drawn before it, which the loop held for its textures until now, still has them, and its picture is the copy
+            // of the frame taken before them (v0.1.9: GpuCompositor.ReadPicture)
             _shotPending = false;
             _runtime.Ui.HideToast = false;
-            string path = _screenshots.Save(pw, ph, _compositor.ReadWindow(pw, ph));
+            string path = _screenshots.Save(pw, ph, _compositor.ReadPicture(pw, ph));
             Say($"screenshot: writing {path} ({pw} x {ph})");
         }
 
@@ -2009,9 +2068,11 @@ internal sealed class GameApp : IDisposable
         }
     }
 
+    // a save's thumbnail is the last drawn frame without the toast and the achievement notice (v0.1.9: the copy the compositor took before them, when that frame
+    // drew one); the frame itself, as shown, keeps them
     private (int Width, int Height, byte[] Rgba)? GrabThumbnail()
     {
-        byte[] full = _compositor.Read(_compositor.Frame);
+        byte[] full = _compositor.Read(_compositor.Picture);
         return (ThumbnailCodec.Width, ThumbnailCodec.Height, ThumbnailCodec.Downscale(full, _compositor.Width, _compositor.Height));
     }
 
@@ -2042,7 +2103,7 @@ internal sealed class GameApp : IDisposable
             $"script {h.Script} (scene {(h.Phase == GamePhase.Running ? h.SceneId : -1)}) cursor {h.Machine.Cursor}, F823 {h.F(823)}, F22 {h.F(22)}, auto {h.AutoMode} skip {h.SkipLatch}, " +
             $"cfg [lang {_services.Config.Language} bgm {_services.Config.MusicVolume} se {_services.Config.SfxVolume} sys {_services.Config.SystemSeVolume} voice {_services.Config.PlayAllVoices} unseen {_services.Config.UnseenTextSpeed} seen {_services.Config.SeenTextSpeed} auto {_services.Config.AutoModeWait} ffRead {_services.Config.FastForwardReadOnly} endInstant {_services.Config.PageEndInstantUnseen}/{_services.Config.PageEndInstantSeen} anim {_services.Config.TextAnimations}/{_services.Config.SeenTextAnimations} win {_services.Config.Bytes[WindowModeOffset]}], " +
             $"history {(h.History is { } hist ? hist.Count : 0)}, restores {h.RestoreCount}, page {h.PageMessages.Count} [{PageSummary(h)}], window {h.Wait.WindowAlpha:F2}, text fade {h.TextFade:F2} (step {h.Wait.TextFadeStep:F4}), F1103 {h.F(1103)}, G10 {_services.Global(10)}, choice {(h.ChoiceOpen ? h.ChoiceKind.ToString() : "-")}, plays {_player.PlaysPosted}, voice {h.Sound.LastVoice} (gain byte {h.Sound.VolumeByte(0xD)}, state {h.Sound.VoiceState}), G73 {_services.Global(VoiceMarks.HeardWord):X4}, voice rows {VoiceRowSummary()}, movies {_movies.OpenSlots}, " +
-            $"toast {(_runtime.Ui.Toast is { } toast ? $"\"{toast.Text}\" a {toast.Alpha:F2}" : "-")}, master gain {_mixer.MasterGain:F2} -> {_mixer.MasterGainTarget:F0}, copies {_copier?.Copies ?? 0}, hooked {_hook?.Emitted ?? 0}, websocket {_webSocket?.State ?? "-"} sent {_webSocket?.Sent ?? 0}, opacity {h.Config.Hud10}, " +
+            $"toast {(_runtime.Ui.Toast is { } toast ? $"\"{toast.Text}\" a {toast.Alpha:F2}" : "-")}, trophy {_runtime.TrophyNoticeSummary()}, master gain {_mixer.MasterGain:F2} -> {_mixer.MasterGainTarget:F0}, copies {_copier?.Copies ?? 0}, hooked {_hook?.Emitted ?? 0}, websocket {_webSocket?.State ?? "-"} sent {_webSocket?.Sent ?? 0}, opacity {h.Config.Hud10}, " +
             $"icon [alpha {h.ClickIconAlpha:F2} tick {h.ClickIconTick} anchor ({h.ClickIconAnchor.X}, {h.ClickIconAnchor.Y}) stored ({h.ClickIconStored.X:F1}, {h.ClickIconStored.Y:F1}) F799 {h.F(799)} {IconSummary(h.LastClickIcon)}], text \"{text}\"");
     }
 

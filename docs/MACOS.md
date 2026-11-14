@@ -16,7 +16,7 @@ Close the game and press **Update to vX.Y.Z**. macOS may ask for **Open Anyway**
 ## Good to know
 
 - **Option+Return** toggles fullscreen. **Fn+F5** and **Fn+F9** quick save and load; **Fn+F12** saves a screenshot to `~/Pictures/Tsukihime`.
-- Saves, settings and logs are in `~/Library/Application Support/Tsuki` (**Help & about > Open the saves folder**). Attach `last_run.log`, `crash.log`, `launcher.log` and `launcher_crash.log` to a problem report.
+- Saves, settings, achievements and logs are in `~/Library/Application Support/Tsuki` (**Help & about > Open the saves folder**). Attach `last_run.log`, `crash.log`, `launcher.log` and `launcher_crash.log` to a problem report.
 - If the game folder can no longer be read, pick it again with **Browse…**, or turn on Tsukihime in **System Settings > Privacy & Security > Files & Folders**.
 - The Dock shows Arcueid's face while the launcher runs; the Finder icon stays the crescent (changing it would break the signature).
 - Terminal: `Tsukihime.app/Contents/MacOS/Tsukihime --game /path/to/CUSA47999` starts the game without the launcher; `--save-dir FOLDER` (game) or `--data FOLDER` (launcher) uses a separate profile; `xattr -dr com.apple.quarantine /path/to/Tsukihime.app` replaces **Open Anyway** for a copy you trust.
@@ -34,6 +34,6 @@ For Intel, use `x64` instead of `arm64`. Follow [PUBLISHING.md](https://github.c
 
 ## Checks
 
-Run `TSUKI_GAME_DIR=/nonexistent dotnet test tests/Tsuki.Tests.Synthetic -c Release` and `dotnet test tests/Tsuki.Tests.Avalonia -c Release` from the source tree. The latter exercises the pages headlessly. `Tsukihime.app/Contents/MacOS/TsukihimeLauncher --render /tmp/tsuki-pages --data /tmp/tsuki-profile --game /nonexistent` writes all seven page PNGs outside the repository. `python3 -I tools/tests/update_e2e.py Tsukihime-vX.Y.Z-macos-ARCH.zip --work /tmp/tsuki-update-e2e` updates an extracted copy of a ZIP with its own launcher.
+Run `TSUKI_GAME_DIR=/nonexistent dotnet test tests/Tsuki.Tests.Synthetic -c Release` and `dotnet test tests/Tsuki.Tests.Avalonia -c Release` from the source tree. The latter exercises the pages headlessly. `Tsukihime.app/Contents/MacOS/TsukihimeLauncher --render /tmp/tsuki-pages --data /tmp/tsuki-profile --game /nonexistent` writes all eight page PNGs outside the repository. `python3 -I tools/tests/update_e2e.py Tsukihime-vX.Y.Z-macos-ARCH.zip --work /tmp/tsuki-update-e2e` updates an extracted copy of a ZIP with its own launcher.
 
 Test native smoke, rendering, audio-device changes, sleep/resume, the one-click update and Gatekeeper on both Mac architectures. Do not use `SDL_VIDEODRIVER=offscreen`: it requires EGL, which macOS does not provide.

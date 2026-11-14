@@ -107,6 +107,13 @@ public sealed partial class AppServices
         FlushMenuSound();
     }
 
+    /// <summary>
+    /// The gain the story's sound effects play at when a script plays one at full volume: volume byte 0xE of the sound model (Config > Sound, "Sound Effects",
+    /// 0 while they are muted), as a factor 0..1, the way <c>SeGain</c> reads it for an effect that is no character's voice. The achievement notice's chime plays
+    /// 6 dB below it (v0.1.9, D7: "at the player's SE volume"); the system sounds' volume (byte 0xF, the menus' sounds) has no say in it.
+    /// </summary>
+    public float SoundEffectGain => Math.Clamp(unchecked((sbyte)Host.Sound.VolumeByte(0xE)) * 0.01f, 0f, 1f);          // signed, as SoundModel.SeGain reads it, and kept to 0..100
+
     private void FlushMenuSound()
     {
         AudioCommand[] commands = Host.Sound.TakeCommands();

@@ -1,0 +1,165 @@
+<UserControl x:Class="Tsuki.Launcher.Views.AchievementsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:Tsuki.Launcher"
+             xmlns:views="clr-namespace:Tsuki.Launcher.Views"
+             xmlns:core="clr-namespace:Tsuki.Launcher.Core">
+  <UserControl.Resources>
+    <BooleanToVisibilityConverter x:Key="B2V"/>
+
+    <!--
+      One achievement: the picture of its square, its name and how it is earned, and at the right its grade over "Locked" or the date.
+      The square: an earned row shows its icon, cut from the player's own game pictures (the blank tile of its grade until the icon is made); a locked row shows
+      the locked tile of its grade and never a game picture. Icon and tiles are 240 px bitmaps with the grade's ring in them, scaled down here; only when there can
+      be no icon (no game folder, a missing picture) is the square the emblem of the grade, a cup drawn by the port's own code in the same frame.
+    -->
+    <DataTemplate x:Key="AchievementRowTemplate" DataType="{x:Type local:AchievementRowView}">
+      <Grid MinHeight="76">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="78"/>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Grid x:Name="Square" Width="60" Height="60" HorizontalAlignment="Left" VerticalAlignment="Center">
+          <Image Source="{Binding Picture}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"/>
+        </Grid>
+        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,11,18,12">
+          <TextBlock x:Name="NameText" Text="{Binding Name}" Style="{StaticResource RowTitle}" TextTrimming="CharacterEllipsis"/>
+          <TextBlock Text="{Binding Detail}" Style="{StaticResource Muted}" Margin="0,2,0,0"/>
+        </StackPanel>
+        <StackPanel Grid.Column="2" VerticalAlignment="Center" MinWidth="118">
+          <TextBlock x:Name="GradeText" Text="{Binding GradeLabel}" Foreground="{Binding GradeBrush}" FontSize="12.5" FontWeight="SemiBold" HorizontalAlignment="Right"/>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,3,0,0">
+            <TextBlock x:Name="StateGlyph" Style="{StaticResource IconText}" Text="&#xE73E;" FontSize="11" Foreground="{StaticResource SuccessBrush}" VerticalAlignment="Center" Margin="0,1,6,0"/>
+            <TextBlock x:Name="StateText" Text="{Binding StateLabel}" FontSize="12" Foreground="#B9C3E3" VerticalAlignment="Center"/>
+          </StackPanel>
+        </StackPanel>
+        <Rectangle Grid.ColumnSpan="3" Height="1" Fill="{StaticResource DividerBrush}" VerticalAlignment="Bottom"/>
+      </Grid>
+      <DataTemplate.Triggers>
+        <!-- a locked row: its words are dimmed; its square is the locked tile, which is quiet as it is -->
+        <DataTrigger Binding="{Binding Earned}" Value="False">
+          <Setter TargetName="NameText" Property="Foreground" Value="{StaticResource MutedBrush}"/>
+          <Setter TargetName="GradeText" Property="Foreground" Value="#6C7699"/>
+          <Setter TargetName="StateGlyph" Property="Text" Value="&#xE72E;"/>
+          <Setter TargetName="StateGlyph" Property="Foreground" Value="#6C7699"/>
+          <Setter TargetName="StateText" Property="Foreground" Value="#6C7699"/>
+        </DataTrigger>
+      </DataTemplate.Triggers>
+    </DataTemplate>
+  </UserControl.Resources>
+
+  <ScrollViewer x:Name="Scroll" Style="{StaticResource PageScroll}">
+    <StackPanel Margin="0,0,0,24">
+      <views:PageHeader Overline="{x:Static core:LauncherTexts.AchievementsOverline}" Title="{x:Static core:LauncherTexts.AchievementsHeading}"
+                        Description="{x:Static core:LauncherTexts.AchievementsDescription}"/>
+
+      <!--
+        the summary: the earned share, the count, and the emblems of the four grades with how many of each are earned. A little tighter than a card of another
+        page (10 px under its divider, 16 at its foot, 40 px emblems), as the notice card is: in the smallest window (960 x 600) the page shows both switches
+        under it without scrolling (D8 P-2)
+      -->
+      <Border x:Name="SummaryCard" Style="{StaticResource Card}" Padding="22,18,22,16">
+        <StackPanel>
+          <local:TrackedText Text="{x:Static core:LauncherTexts.AchievementsProgressCaps}" Style="{StaticResource SmallCaps}"/>
+          <Rectangle Style="{StaticResource GoldDivider}" Margin="0,11,0,10"/>
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center" Margin="0,0,30,0">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="{Binding AchievementPercentText}" Style="{StaticResource Heading}" FontSize="46"/>
+                <TextBlock Text="{Binding AchievementCountLine}" Foreground="{StaticResource MutedBrush}" FontSize="14" VerticalAlignment="Bottom" Margin="14,0,0,11"/>
+              </StackPanel>
+              <ProgressBar Style="{StaticResource MoonProgress}" Value="{Binding AchievementPercent, Mode=OneWay}" Minimum="0" Maximum="100" Margin="0,6,0,2"
+                           AutomationProperties.Name="{x:Static core:LauncherTexts.AchievementsTitle}"/>
+            </StackPanel>
+            <ItemsControl Grid.Column="1" ItemsSource="{Binding AchievementGrades}" Focusable="False" VerticalAlignment="Center">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <StackPanel Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <!-- a grade: its emblem (a cup drawn by the port's own code in the icons' frame: a 240 px bitmap, scaled down as the rows' squares are), its count, its name -->
+                <DataTemplate DataType="{x:Type local:AchievementGradeView}">
+                  <StackPanel Width="76">
+                    <Image Source="{Binding Picture}" Width="40" Height="40" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" HorizontalAlignment="Center"/>
+                    <TextBlock Text="{Binding Count}" FontSize="13.5" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                    <TextBlock Text="{Binding Label}" Foreground="{StaticResource MutedBrush}" FontSize="11.5" HorizontalAlignment="Center"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </Grid>
+        </StackPanel>
+      </Border>
+
+      <!--
+        the notice in the game and, under it, its sound (both off until the player turns them on), and where the record is kept: right under the summary, above
+        the tabs and the list, so that a player who comes to turn them on finds them without going past the 30 rows (D8 P-2); the keyboard reaches them in that
+        order too (no TabIndex on this page: the tab order is the order of this markup). Its rows are the theme's CompactSettingRow, and it has 10 px over the record's
+        note and 16 at its foot: in the window the launcher opens with (1200 x 780) the whole card is in view, and the notes of the page's state under it; in
+        the smallest window (960 x 600) both switch rows are (the self-test measures both)
+      -->
+      <Border x:Name="NoticeCard" Style="{StaticResource Card}" Margin="0,18,0,0" Padding="22,18,22,16">
+        <StackPanel>
+          <local:TrackedText Text="{x:Static core:LauncherTexts.AchievementsNoticeCaps}" Style="{StaticResource SmallCaps}"/>
+          <Rectangle Style="{StaticResource GoldDivider}" Margin="0,11,0,4"/>
+          <HeaderedContentControl x:Name="NoticeRow" Style="{StaticResource CompactSettingRow}" Header="{x:Static core:LauncherTexts.AchievementsNoticeLabel}" Tag="{x:Static core:LauncherTexts.AchievementsNoticeDescription}">
+            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding TrophyNotice, Mode=TwoWay}" AutomationProperties.Name="{x:Static core:LauncherTexts.AchievementsNoticeLabel}"/>
+          </HeaderedContentControl>
+          <HeaderedContentControl x:Name="SoundRow" Style="{StaticResource CompactSettingRow}" Header="{x:Static core:LauncherTexts.AchievementsSoundLabel}" Tag="{x:Static core:LauncherTexts.AchievementsSoundDescription}">
+            <CheckBox Style="{StaticResource Switch}" IsChecked="{Binding TrophySound, Mode=TwoWay}" AutomationProperties.Name="{x:Static core:LauncherTexts.AchievementsSoundLabel}"/>
+          </HeaderedContentControl>
+          <TextBlock x:Name="FileNote" Style="{StaticResource Muted}" Margin="0,10,0,0" Text="{x:Static core:LauncherTexts.AchievementsFileNote}"/>
+        </StackPanel>
+      </Border>
+
+      <!--
+        the two notes of the page's state come after the notice card, right above the list they speak of: the switches keep their place in every state, and in
+        the window the launcher opens with both notes are in view with the whole card; in the smallest window a note above the card would push the switches
+        under the footer, so there the notes take a scroll
+      -->
+
+      <!-- trophies.ini could not be read -->
+      <Border x:Name="DamagedNote" Margin="0,14,0,0" Padding="14,10" CornerRadius="8" Background="#1FE8C877" BorderBrush="#66E8C877" BorderThickness="1" Visibility="{Binding AchievementsDamaged, Converter={StaticResource B2V}}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Style="{StaticResource IconText}" Text="&#xE7BA;" FontSize="13" Foreground="{StaticResource WarningBrush}" VerticalAlignment="Top" Margin="0,2,10,0"/>
+          <TextBlock Grid.Column="1" Text="{x:Static core:LauncherTexts.AchievementsDamagedNote}" TextWrapping="Wrap" FontSize="12.5" LineHeight="18" Foreground="#F2E3B8"/>
+        </Grid>
+      </Border>
+
+      <!-- no game folder to read the chapter names and the icons from: the page works with the port's own names, and an earned row shows its grade's emblem -->
+      <Border x:Name="NoGameNote" Margin="0,14,0,0" Padding="14,10" CornerRadius="8" Background="#145E8BFF" BorderBrush="#408FA6FF" BorderThickness="1" Visibility="{Binding AchievementsNoGame, Converter={StaticResource B2V}}">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Style="{StaticResource IconText}" Text="&#xE946;" FontSize="13" Foreground="{StaticResource MoonPaleBrush}" VerticalAlignment="Top" Margin="0,2,10,0"/>
+          <TextBlock Grid.Column="1" Text="{x:Static core:LauncherTexts.AchievementsNoGameNote}" TextWrapping="Wrap" FontSize="12.5" LineHeight="18" Foreground="#B9C3E3"/>
+          <Button Grid.Column="2" Content="{x:Static core:LauncherTexts.AchievementsOpenGameFiles}" Style="{StaticResource LinkButton}" Command="{Binding FixCommand}" CommandParameter="{x:Static core:LauncherPage.GameFiles}" VerticalAlignment="Center" Margin="16,0,2,0"/>
+        </Grid>
+      </Border>
+
+      <!-- the list: the three tabs with their counts, then one row per achievement of the tab on show -->
+      <Border x:Name="ListCard" Style="{StaticResource Card}" Margin="0,18,0,0" Padding="22,18,22,6">
+        <StackPanel>
+          <ListBox x:Name="Tabs" Style="{StaticResource Segmented}" ItemsSource="{Binding AchievementTabs}" SelectedItem="{Binding SelectedAchievementTab, Mode=TwoWay}" DisplayMemberPath="Label"
+                   HorizontalAlignment="Left" Width="400" AutomationProperties.Name="{x:Static core:LauncherTexts.AchievementsTitle}"/>
+          <Rectangle Style="{StaticResource GoldDivider}" Margin="0,16,0,0"/>
+          <TextBlock x:Name="EmptyText" Text="{Binding AchievementsEmptyText}" Style="{StaticResource Muted}" Margin="0,20,0,18" Visibility="{Binding NoAchievementRows, Converter={StaticResource B2V}}"/>
+          <ItemsControl x:Name="Rows" ItemsSource="{Binding AchievementRows}" ItemTemplate="{StaticResource AchievementRowTemplate}" Focusable="False"/>
+        </StackPanel>
+      </Border>
+    </StackPanel>
+  </ScrollViewer>
+</UserControl>

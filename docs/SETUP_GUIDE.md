@@ -4,7 +4,7 @@
 and macOS. Paths are given for Windows; the [Linux guide](LINUX.md) and [macOS guide](MACOS.md) give the
 paths, requirements and notes for those systems.
 
-This guide describes version 0.1.8. Downloaded builds may differ from the current source.
+This guide describes version 0.1.9. Downloaded builds may differ from the current source.
 Windows packages include `SETUP_GUIDE.txt` beside the programs, opened by
 **Help & about > Open the setup guide**; on Linux and macOS that button opens this Markdown copy in `docs/`.
 
@@ -138,8 +138,8 @@ starts it. This notice identifies an unknown publisher; it is not a security ass
 
 ### 4.2 The launcher
 
-The English launcher has seven pages: **Play**, **Game files**, **Display**, **Language & sound**,
-**Controls**, **Saves**, **Help & about**. The footer has status, **Log** and **PLAY**.
+The English launcher has eight pages: **Play**, **Game files**, **Display**, **Language & sound**,
+**Controls**, **Saves**, **Achievements** (section 5.8), **Help & about**. The footer has status, **Log** and **PLAY**.
 Only one launcher runs at a time. On Windows, reopening it brings the existing window forward; on
 Linux and macOS a second start only says it is already open.
 
@@ -258,19 +258,20 @@ quick load; Delete removes the slot under the cursor and M copies it. At a chapt
 ### 5.5 Screenshots
 
 **F12** saves a PNG at the current window size to
-`%USERPROFILE%\Pictures\Tsukihime\Tsukihime_<date>_<time>.png`. The brief *Screenshot saved* notice is
-excluded from the picture. **Config > System > Screenshot Notice** hides the notice without disabling
-screenshots. Print Screen, Win+Print Screen, Alt+Print Screen and Win+Shift+S remain Windows shortcuts
-and do not trigger game actions.
+`%USERPROFILE%\Pictures\Tsukihime\Tsukihime_<date>_<time>.png`. The brief *Screenshot saved* message and
+the achievement message are excluded from the picture. **Config > System > Screenshot Notify** hides the
+message without disabling screenshots. Print Screen, Win+Print Screen, Alt+Print Screen and Win+Shift+S
+remain Windows shortcuts and do not trigger game actions.
 
 ### 5.6 The port's own rows in Config
 
 The game's Config screen is the PS4's, with a few rows the port adds at the bottom of the tabs:
 
 - **System**: **Display Mode** (Windowed / Fullscreen), **Window Size** (the presets that fit your
-  monitor), **Screenshot Notice**, **Copy Text to Clipboard**, **Text Hooker Output**, **Text WebSocket**
-  (the last three: section 6) and **Text Window Opacity** (0..100 % in 5 % steps; 100 % is the PS4 look;
-  it darkens or lightens the message window's background, never the text).
+  monitor), **Screenshot Notify**, **Achievement Notify** and **Achievement Sound** (section 5.8),
+  **Copy Text to Clipboard**, **Text Hooker Output**, **Text WebSocket** (the last three: section 6) and
+  **Text Window Opacity** (0..100 % in 5 % steps; 100 % is the PS4 look; it darkens or lightens the
+  message window's background, never the text).
 - **Sound**: **Mute in Background** (off by default): every sound fades out when the game window loses the
   focus and back in when it returns.
 - **Controls**: **Button Prompts** (Auto / Keyboard / PlayStation / Xbox).
@@ -284,23 +285,48 @@ Paste that path into File Explorer or choose **Saves > Open folder**. Screenshot
 |---|---|
 | `save.dat` | All 140 slots, read/unlocked progress and game config. `save.dat.bak` keeps the previous generation. A damaged save is set aside and the backup tried; if neither is usable, a new profile starts. |
 | `settings.ini` | Port settings, listed in appendix A. |
+| `trophies.ini` | Your achievements and when you earned them (section 5.8). |
 | `game_dir.txt` | Remembered game folder. |
 | `last_run.log`, `crash.log` | Run log of PLAY (on Linux and macOS, of every start) and failure log. |
 | `backups\<date>-<time>\` | Launcher backups. |
 | `icons\tsukihime.ico` | Icon made from your own copy. |
 
-Close the game before backing up, restoring or importing. **Saves > Back up now** copies `save.dat`
-and `settings.ini` into `backups\yyyyMMdd-HHmmss\`. Choose a backup by its date and slot count, then
-**Restore**. Restore backs up the current save first and replaces only `save.dat`, leaving settings
-unchanged. Restore the newly made backup to undo it. Back up before troubleshooting changes.
+Close the game before backing up, restoring or importing. **Saves > Back up now** copies `save.dat`,
+`settings.ini` and `trophies.ini` into `backups\yyyyMMdd-HHmmss\`. Choose a backup by its date and slot
+count, then **Restore**. Restore backs up the current save first and replaces only `save.dat`, leaving
+settings unchanged. Your achievements are kept: what the replaced save had earned is recorded first, and
+the backup's achievements are added. Restore the newly made backup to undo it. Back up before
+troubleshooting changes.
+
+To start over with a new profile, close the game and remove `save.dat`, `save.dat.bak` and any
+`save.dat.*.tmp`.
 
 For a **PS4 or shadPS4 save**, use its **4 MiB** image, normally `savedata000`. The launcher looks under
 `%APPDATA%\shadPS4\home\<user>\savedata\CUSA47999` and offers **Import it**; **Choose a file…** accepts
-an image elsewhere. Import backs up the current save before replacing `save.dat`. It never changes
-the source image.
+an image elsewhere. Import backs up the current save and records what it had earned before replacing
+`save.dat`. It never changes the source image. While the game runs, restore and import leave
+`trophies.ini` to the game.
 
 Only one game can use a save directory at a time. `--save-dir` selects a separate profile, including
 settings and crash logging; see appendix B. Linux profile locations are in the Linux guide.
+
+### 5.8 Achievements
+
+The PS4's 30 trophies are achievements here, earned by the same rules. The launcher's **Achievements**
+page shows your progress, with cups drawn by the port for the four grades, then one row per achievement:
+an earned one with an icon cut from your own game's pictures and the date you earned it, a locked one
+with a padlock.
+
+**Notify in the game** (**Config > System > Achievement Notify**) shows a short message at the top right
+when you earn one; **Sound when notified** (**Achievement Sound**) adds a soft chime to it at the
+**Sound Effects** volume. Both switches are at the top of the Achievements page, under your progress,
+and both are **off** by default; achievements are recorded either way. Save thumbnails and fades never
+show the message, nor do screenshots (section 5.5).
+
+Progress made before achievements existed counts too: at start the game records, without a date, what
+your save has already earned. With **Notify in the game** on, these are shown one by one on the title
+screen; pressing a key or clicking there skips the rest. Achievements are kept in `trophies.ini` and
+only grow: deleting slots, restoring a backup or importing a PS4 save never removes one.
 
 ## 6. For Japanese learners (日本語学習者向け)
 
@@ -341,14 +367,14 @@ page and native clients (no Origin header, or the game's own address as the orig
 other browser pages are refused, and the game log names each refused origin.
 
 The server listens on **IPv4 loopback only**. **Config > System > Text WebSocket** toggles it.
-If its notice reports a port conflict, close the game, set `text_websocket_port` to an unused port
+If its message reports a port conflict, close the game, set `text_websocket_port` to an unused port
 from 1 to 65535, restart, then change the page's connection address too. Restart after editing origin
 or port settings; neither has a row in the game.
 
 **3. Copy Text to Clipboard: clipboard watchers, off by default.**
 Enable **Config > System > Copy Text to Clipboard**, then select clipboard input in your dictionary
 or translator, such as Yomitan's clipboard monitor or Textractor's clipboard thread. Each new line
-replaces the clipboard; a notice appears on the first copy of the session.
+replaces the clipboard; a short message appears on the first copy of the session.
 
 ## 7. Troubleshooting (トラブルシューティング)
 
@@ -373,6 +399,7 @@ The launcher uses English; game messages use the selected game language.
 | Launcher already open | Use the existing window (Windows brings it forward). |
 | Save folder/file cannot be written, or `save.dat` is a folder | Free disk space, correct profile permissions or rename that directory. Saves held only in memory are lost when the game closes. |
 | Damaged save; backup used or new profile started | The message names the file set aside. Check **Saves** and restore a backup if needed. |
+| `trophies.ini` could not be read | Close the program holding it, such as an editor or a sync tool; the page reads it again. The game never writes over a file it could not read, and sets one that is not a record aside as `trophies.ini.broken-<time>`. |
 | Log could not be opened | Close programs locking the file and check profile permissions. The game continues without that log. |
 | Text WebSocket could not start or page cannot connect | Check port conflicts, trusted origin and browser permissions in section 6. Restart after changing settings. |
 | Game closed with error code | Press **Log**, read the last lines and report the failure. |
@@ -431,7 +458,9 @@ comment; unknown keys and bad values are ignored.
 | `text_websocket` | `on`, `off` | Config > System > Text WebSocket (default `off`) |
 | `text_websocket_port` | `1`..`65535` | The WebSocket's port (default `6677`); no row in the game, edit the file |
 | `text_websocket_origin` | one ASCII HTTP or HTTPS origin | The trusted browser page's scheme, host and any nondefault port, without credentials, a path, query or fragment. Use punycode for IDNs; Unicode is ignored. Unset trusts texthooker-ui (`https://renji-xd.github.io`) only. Restart after editing |
-| `screenshot_notice` | `on`, `off` | Config > System > Screenshot Notice (default `on`) |
+| `screenshot_notice` | `on`, `off` | Config > System > Screenshot Notify (default `on`) |
+| `trophy_notice` | `on`, `off` | Config > System > Achievement Notify and the launcher's Achievements page (default `off`; achievements are recorded either way) |
+| `trophy_sound` | `on`, `off` | Config > System > Achievement Sound and the launcher's Achievements page: a short chime with the message, only while `trophy_notice` is `on` (default `off`) |
 | `update_check` | `on`, `off` | The launcher's Help & about > Check for updates when the launcher starts (default `on`) |
 | `arcueid_icon` | `on`, `off` | The launcher's Help & about > Show Arcueid on the program icons (default `on`) |
 

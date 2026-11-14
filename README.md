@@ -61,6 +61,7 @@ The game files are only read, never changed. The setup guide explains the suppor
 - Original voices, music, sound effects and movies.
 - 140 save slots with thumbnails, quick save/load, backlog voice replay and rewind.
 - Auto and skip modes, flowchart, gallery and PS4 or shadPS4 save import.
+- The PS4's 30 trophies as achievements, with a launcher page and optional notifications in the game.
 - Keyboard, mouse, PlayStation and Xbox controller support with matching button prompts.
 - Windowed or borderless fullscreen, remembered window size and F12 screenshots.
 - Optional text output for dictionary tools through native text hooks, the clipboard or a local WebSocket feed.
@@ -78,7 +79,7 @@ The game files are only read, never changed. The setup guide explains the suppor
 
 ## Status and support
 
-The port was developed against **CUSA47999, update 1.01**. Other builds are checked at startup and may be refused if required tables or files cannot be found. Only languages present in your game files are offered. Current source version is **0.1.8**. The Linux download is newer and less tested than the Windows one.
+The port was developed against **CUSA47999, update 1.01**. Other builds are checked at startup and may be refused if required tables or files cannot be found. Only languages present in your game files are offered. Current source version is **0.1.9**. The Linux download is newer and less tested than the Windows one.
 
 Report problems through Issues with reproduction steps and the relevant log. Include the build information and your operating system, graphics card and driver. See [CONTRIBUTING.md](CONTRIBUTING.md) for details. Do not attach game files, saves, story text or screenshots of the game.
 

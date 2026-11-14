@@ -25,6 +25,9 @@ public enum LauncherPage
     /// <summary>Backups, restore, import.</summary>
     Saves,
 
+    /// <summary>The achievements (the PS4 trophies): what is earned, and the switches of the notice in the game and of its sound (v0.1.9).</summary>
+    Achievements,
+
     /// <summary>What this is, keys, licences.</summary>
     Help,
 }

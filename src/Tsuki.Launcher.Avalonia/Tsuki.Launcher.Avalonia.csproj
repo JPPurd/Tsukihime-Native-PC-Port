@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType>
     <AssemblyName>TsukihimeLauncher</AssemblyName>
     <RootNamespace>Tsuki.Launcher.Avalonia</RootNamespace>
-    <Version>0.1.8</Version>
+    <Version>0.1.9</Version>
     <Product>Tsukihime PC port</Product>
     <AssemblyTitle>Tsukihime Launcher</AssemblyTitle>
     <ApplicationIcon>..\..\assets\icon\tsukihime.ico</ApplicationIcon>
@@ -45,6 +45,7 @@
     <Compile Include="..\Tsuki.Launcher\Core\Updater.cs" Link="Core\Updater.cs" />
     <Compile Include="..\Tsuki.Launcher\Core\UpdateButtonState.cs" Link="Core\UpdateButtonState.cs" />
     <Compile Include="..\Tsuki.Launcher\Core\LauncherTexts.cs" Link="Core\LauncherTexts.cs" />
+    <Compile Include="..\Tsuki.Launcher\Core\Achievements.cs" Link="Core\Achievements.cs" />
     <AvaloniaResource Include="..\..\assets\icon\tsukihime_256.png" Link="Assets\tsukihime_256.png" />
     <None Include="Licenses\Avalonia-MIT.txt" Link="licenses\Avalonia-MIT.txt" CopyToPublishDirectory="PreserveNewest" />
     <None Include="Licenses\SkiaSharp-LICENSE.txt" Link="licenses\SkiaSharp-LICENSE.txt" CopyToPublishDirectory="PreserveNewest" />

@@ -19,6 +19,37 @@ public static class UiComposedId
 
     /// <summary>EXIT on the title under the cursor (cyan letters).</summary>
     public const int TitleExitCursor = 1;
+
+    /// <summary>
+    /// The first of the four grade emblems of the achievement notice (v0.1.9): <c>TrophyEmblemFirst + (int)grade</c>. They are not composed from the sheets and
+    /// need no game data: the port draws them (<see cref="Tsuki.Data.Trophies.TrophyIconArt.Emblem"/>, in <see cref="UiAssets.Composed(int)"/> on first use); they
+    /// are the same in every language.
+    /// </summary>
+    public const int TrophyEmblemFirst = 16;
+
+    /// <summary>The id of the emblem of <paramref name="grade"/>.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The grade is not one of the four.</exception>
+    public static int TrophyEmblem(Tsuki.Engine.Trophies.TrophyGrade grade) =>
+        (uint)grade < 4 ? TrophyEmblemFirst + (int)grade : throw new ArgumentOutOfRangeException(nameof(grade), grade, "not a trophy grade");
+
+    /// <summary>True for the ids of the four emblems.</summary>
+    public static bool IsTrophyEmblem(int id) => id is >= TrophyEmblemFirst and < TrophyEmblemFirst + 4;
+
+    /// <summary>
+    /// The first of the 30 icons of the achievements (v0.1.9): <c>TrophyIconFirst + trophy id</c>. They are the host's: it cuts an icon from the player's own
+    /// pictures when the achievement is earned and hands it to <see cref="UiAssets.SetTrophyIcon"/>; they are the same in every language.
+    /// </summary>
+    public const int TrophyIconFirst = 32;
+
+    /// <summary>The id of the icon of trophy <paramref name="id"/> (0..29).</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The id is not a trophy's.</exception>
+    public static int TrophyIcon(int id) =>
+        (uint)id < Tsuki.Engine.Trophies.TrophyTable.Count
+            ? TrophyIconFirst + id
+            : throw new ArgumentOutOfRangeException(nameof(id), id, "not a trophy id");
+
+    /// <summary>True for the ids of the 30 icons.</summary>
+    public static bool IsTrophyIcon(int id) => id is >= TrophyIconFirst and < TrophyIconFirst + Tsuki.Engine.Trophies.TrophyTable.Count;
 }
 
 /// <summary>Helpers for the composed pictures.</summary>

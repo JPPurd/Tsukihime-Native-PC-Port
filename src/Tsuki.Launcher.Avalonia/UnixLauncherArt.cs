@@ -3,6 +3,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Platform;
 using Tsuki.Data;
 using Tsuki.Engine.Contracts;
+using Tsuki.Launcher.Core;
 
 namespace Tsuki.Launcher.Avalonia;
 
@@ -49,6 +50,43 @@ internal static class UnixLauncherArt
 
         var bitmap = new WriteableBitmap(new PixelSize(frame.Size, frame.Size), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
         using (ILockedFramebuffer target = bitmap.Lock()) { System.Runtime.InteropServices.Marshal.Copy(bgra, 0, target.Address, bgra.Length); }
+        return bitmap;
+    }
+
+    /// <summary>
+    /// A picture of the Achievements page (the icon of an achievement, the tile that stands in for one, a grade's emblem) as a bitmap <paramref name="side"/>
+    /// pixels a side.
+    /// The picture is reduced by area average, which keeps its thin ring even, and its colours are multiplied by its alpha: the data is straight alpha, the
+    /// bitmap premultiplied like the launcher's other pictures, which is what the renderer scales and blends as it is. Touches nothing of the window: it may
+    /// be called on a worker thread.
+    /// </summary>
+    /// <exception cref="ArgumentException">The picture is not Size × Size RGBA pixels, or the side is not one a picture can have.</exception>
+    public static WriteableBitmap TileBitmap(AchievementIcon icon, int side)
+    {
+        ArgumentNullException.ThrowIfNull(icon);
+        byte[] rgba = icon.Size == side && icon.Rgba.Length == side * side * 4
+            ? icon.Rgba
+            : Tsuki.Data.Trophies.TrophyIconArt.Reduce(icon.Rgba, icon.Size, icon.Size, side, side);
+        byte[] bgra = new byte[side * side * 4];
+        for (int i = 0; i < bgra.Length; i += 4)
+        {
+            int a = rgba[i + 3];
+            bgra[i] = (byte)((rgba[i + 2] * a + 127) / 255);
+            bgra[i + 1] = (byte)((rgba[i + 1] * a + 127) / 255);
+            bgra[i + 2] = (byte)((rgba[i] * a + 127) / 255);
+            bgra[i + 3] = (byte)a;
+        }
+
+        var bitmap = new WriteableBitmap(new PixelSize(side, side), new Vector(96, 96), PixelFormat.Bgra8888, AlphaFormat.Premul);
+        using (ILockedFramebuffer target = bitmap.Lock())
+        {
+            // row by row: a frame buffer's rows may be longer than their pixels
+            for (int y = 0; y < side; y++)
+            {
+                System.Runtime.InteropServices.Marshal.Copy(bgra, y * side * 4, target.Address + (y * target.RowBytes), side * 4);
+            }
+        }
+
         return bitmap;
     }
 

@@ -212,20 +212,30 @@ public static class GameLayoutResolver
         }
 
         // the folder above the game (one or two levels): every game folder below, patch folders paired with their base
-        List<string> inside = [.. Directory.EnumerateDirectories(chosen).Where(HasEboot)];
-        if (inside.Count == 0)
+        List<string> inside;
+        try
         {
-            foreach (string sub in Directory.EnumerateDirectories(chosen))
+            inside = [.. Directory.EnumerateDirectories(chosen).Where(HasEboot)];
+            if (inside.Count == 0)
             {
-                try
+                foreach (string sub in Directory.EnumerateDirectories(chosen))
                 {
-                    inside.AddRange(Directory.EnumerateDirectories(sub).Where(HasEboot));
-                }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-                {
-                    // an unreadable folder holds no game we can use
+                    try
+                    {
+                        inside.AddRange(Directory.EnumerateDirectories(sub).Where(HasEboot));
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+                    {
+                        // an unreadable folder holds no game we can use
+                    }
                 }
             }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // the chosen folder is there and cannot be listed (a junction or link whose target is gone, as to a drive that is unplugged; a folder without the
+            // permission to read it): no game that can be used is inside
+            return new GameLayout(chosen, GameLayoutKind.NoGame);
         }
 
         List<string> bases = [.. inside.Where(f => !IsPatchFolder(f))];
@@ -385,7 +395,7 @@ public static class GameLayoutResolver
         }
 
         // the siblings as the disk spells them (the comparison ignores case): first the exact suffixes, then any sibling named after the stem that is a patch
-        List<string> siblings = [.. Directory.EnumerateDirectories(parent).Where(s => !string.Equals(s, baseFolder, StringComparison.OrdinalIgnoreCase))];
+        List<string> siblings = Siblings(parent, baseFolder);
         foreach (string stem in stems)
         {
             foreach (string suffix in PatchSuffixes)
@@ -429,7 +439,7 @@ public static class GameLayoutResolver
             }
         }
 
-        List<string> siblings = [.. Directory.EnumerateDirectories(parent).Where(s => !string.Equals(s, patchFolder, StringComparison.OrdinalIgnoreCase))];
+        List<string> siblings = Siblings(parent, patchFolder);
         foreach (string stem in stems)
         {
             foreach (string candidate in new[] { stem }.Concat(BaseSuffixes.Select(s => stem + s)))
@@ -457,6 +467,20 @@ public static class GameLayoutResolver
         }
 
         return null;
+    }
+
+    // The other folders of `parent`, as the disk spells them. A parent that cannot be listed (no permission to list it, a link whose target is gone) shows no
+    // sibling: what cannot be seen beside the folder is not there for the layout.
+    private static List<string> Siblings(string parent, string folder)
+    {
+        try
+        {
+            return [.. Directory.EnumerateDirectories(parent).Where(s => !string.Equals(s, folder, StringComparison.OrdinalIgnoreCase))];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
     }
 
     /// <summary>A short note for a layout that is a game: "update folder CUSA47999-patch beside it; its files take precedence", or why a sibling update was left alone, or null.</summary>

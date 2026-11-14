@@ -3,8 +3,9 @@
 //   TsukihimeLauncher.exe [--game DIR] [--data DIR]       the launcher window (--game replaces the remembered folder, --data the profile folder %APPDATA%\Tsuki)
 //   TsukihimeLauncher.exe --selftest FILE --data DIR [--game DIR]
 //                                                    drives the view model like the pages do over a temporary profile and writes the checks to FILE (verification mode)
-//   TsukihimeLauncher.exe --render OUTDIR [--game DIR] [--data DIR] [--page NAME] [--height PIXELS]
-//                                                    draws every page offscreen to PNG files and exits; no window is ever shown (verification mode)
+//   TsukihimeLauncher.exe --render OUTDIR [--game DIR] [--data DIR] [--page NAME] [--height PIXELS] [--scale PERCENT]
+//                                                    draws every page offscreen to PNG files and exits; no window is ever shown (verification mode).
+//                                                    --scale 150 draws them as on a screen at 150 % (100 to 300)
 //   TsukihimeLauncher.exe --update-selftest FILE --data DIR --update-api http://127.0.0.1:PORT/ [--update-current X.Y.Z]
 //                                                    package K40: checks a loopback stand-in of GitHub, installs the update it offers over the launcher's own folder
 //                                                    and restarts into the new launcher, which runs --selftest FILE.after.txt (verification mode, no window)
@@ -25,12 +26,24 @@ namespace Tsuki.Launcher;
 /// <summary>The WPF application.</summary>
 public partial class LauncherApp : Application
 {
-    private const string Usage = "usage: TsukihimeLauncher [--game DIR] [--data DIR] [--render OUTDIR [--page NAME] [--height PIXELS]] [--selftest FILE] [--update-selftest FILE --update-api URL [--update-current X.Y.Z]] [--stamp-selftest FILE --data DIR [--stamp-off]]";
+    private const string Usage = "usage: TsukihimeLauncher [--game DIR] [--data DIR] [--render OUTDIR [--page NAME] [--height PIXELS] [--scale PERCENT]] [--selftest FILE] [--update-selftest FILE --update-api URL [--update-current X.Y.Z]] [--stamp-selftest FILE --data DIR [--stamp-off]]";
 
     /// <summary>The arguments an update does not pass on to the launcher it restarts into (each takes one value).</summary>
-    private static readonly string[] UpdateOnlyArguments = ["--after-update", "--updated-from", "--update-current", "--update-selftest", "--selftest", "--render", "--page", "--height"];
+    private static readonly string[] UpdateOnlyArguments = ["--after-update", "--updated-from", "--update-current", "--update-selftest", "--selftest", "--render", "--page", "--height", "--scale"];
+
+    /// <summary>The verification modes. Nobody watches them, so they never open a box: it would wait for a click on the screen of whoever started them (package R1).</summary>
+    private static readonly string[] VerificationModes = ["--render", "--selftest", "--update-selftest", "--stamp-selftest"];
 
     private LauncherPaths _paths = LauncherPaths.ForUser();
+
+    /// <summary>True when the command line names a verification mode, also one given without its value. Read before the arguments are parsed.</summary>
+    private bool _unattended;
+
+    /// <summary>The profile --data named, once it is read: the only place a verification mode writes its crash log (never the player's own profile).</summary>
+    private LauncherPaths? _dataProfile;
+
+    /// <summary>A verification mode met an exception nobody caught: its run does not end with 0.</summary>
+    private bool _crashed;
     private Mutex? _instance;
     private string[] _args = [];
     private LauncherModel? _windowModel;
@@ -39,9 +52,10 @@ public partial class LauncherApp : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        _unattended = e.Args.Any(a => VerificationModes.Contains(a, StringComparer.Ordinal));
         DispatcherUnhandledException += (_, args) =>
         {
-            Report(args.Exception, _paths);
+            Report(args.Exception);
             args.Handled = true;
         };
 
@@ -104,6 +118,10 @@ public partial class LauncherApp : Application
                     OffscreenRender.Height = height;
                     i++;
                     break;
+                case "--scale" when i + 1 < e.Args.Length && int.TryParse(e.Args[i + 1], NumberStyles.None, CultureInfo.InvariantCulture, out int percent) && percent is >= 100 and <= 300:
+                    OffscreenRender.Scale = percent / 100.0;
+                    i++;
+                    break;
                 default:
                     bad = e.Args[i];
                     break;
@@ -149,14 +167,14 @@ public partial class LauncherApp : Application
         {
             // the verification modes run with nobody watching: a modal box there would hang the harness that started them (package R1)
             string message = $"{Usage}{Environment.NewLine}unknown or incomplete argument: {bad}";
-            if (render is not null || selfTest is not null || updateSelfTest is not null || stampSelfTest is not null)
+            if (_unattended)
             {
                 Console.Error.WriteLine(message);
                 WriteUsageError(render, selfTest ?? updateSelfTest ?? stampSelfTest, message);
             }
             else
             {
-                MessageBox.Show(message, "Tsukihime Launcher");
+                Box(message, MessageBoxImage.None);
             }
 
             Shutdown(64);
@@ -165,6 +183,7 @@ public partial class LauncherApp : Application
 
         LauncherPaths paths = data is null ? LauncherPaths.ForUser() : new LauncherPaths(Path.GetFullPath(data));
         _paths = paths;
+        _dataProfile = data is null ? null : paths;
         var model = new LauncherModel(paths, AppContext.BaseDirectory, game);
         if (source is not null)
         {
@@ -182,9 +201,19 @@ public partial class LauncherApp : Application
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
             _ = Dispatcher.InvokeAsync(async () =>
             {
-                string report = await OffscreenRender.SelfTestAsync(model, paths, game, from is { } v ? (v, left) : null);
-                WriteReport(Path.GetFullPath(selfTest), report);
-                Shutdown(report.Contains("FAIL", StringComparison.Ordinal) ? 1 : 0);
+                string report;
+                try
+                {
+                    report = await OffscreenRender.SelfTestAsync(model, paths, game, from is { } v ? (v, left) : null);
+                }
+                catch (Exception ex)
+                {
+                    // v0.1.9 FIXES D11 W-1: an exception stayed in this lambda's task, so no report was written, Shutdown was never called and whoever started the
+                    // self-test waited for ever (a trophies.ini that is a folder, a game folder that cannot be listed)
+                    report = "FAIL  the self-test stopped: " + ex + Environment.NewLine;
+                }
+
+                EndSelfTest(selfTest, report, !report.Contains("FAIL", StringComparison.Ordinal));
             });
             return;
         }
@@ -206,8 +235,7 @@ public partial class LauncherApp : Application
                     report = "FAIL  the stamp self-test stopped: " + ex + Environment.NewLine;
                 }
 
-                WriteReport(reportPath, report);
-                Shutdown(report.Contains("FAIL", StringComparison.Ordinal) ? 1 : 0);
+                EndSelfTest(reportPath, report, !report.Contains("FAIL", StringComparison.Ordinal));
             });
             return;
         }
@@ -225,7 +253,17 @@ public partial class LauncherApp : Application
                     restartInto = exe;
                     updatedFromVersion = old;
                 };
-                string report = await OffscreenRender.UpdateSelfTestAsync(model);
+                string report;
+                try
+                {
+                    report = await OffscreenRender.UpdateSelfTestAsync(model);
+                }
+                catch (Exception ex)
+                {
+                    // v0.1.9 FIXES D11 W-1: as in --selftest, an exception here left the launcher running without a report
+                    report = "FAIL  the self-test stopped: " + ex + Environment.NewLine;
+                }
+
                 bool ok = !report.Contains("FAIL", StringComparison.Ordinal) && restartInto is not null;
                 if (ok)
                 {
@@ -248,8 +286,7 @@ public partial class LauncherApp : Application
                     }
                 }
 
-                WriteReport(reportPath, report);
-                Shutdown(ok ? 0 : 1);
+                EndSelfTest(reportPath, report, ok);
             });
             return;
         }
@@ -285,7 +322,7 @@ public partial class LauncherApp : Application
             _instance = null;
             if (!ActivateOther())
             {
-                MessageBox.Show("The Tsukihime launcher is already open.", "Tsukihime Launcher");
+                Box("The Tsukihime launcher is already open.", MessageBoxImage.None);
             }
 
             Shutdown(0);
@@ -397,10 +434,30 @@ public partial class LauncherApp : Application
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            MessageBox.Show($"The update is installed, but the new launcher could not be started ({e.Message}). Start TsukihimeLauncher.exe again.", "Tsukihime Launcher");
+            Box($"The update is installed, but the new launcher could not be started ({e.Message}). Start TsukihimeLauncher.exe again.", MessageBoxImage.None);
         }
 
         Shutdown(0);
+    }
+
+    /// <summary>
+    /// The end of every self-test (v0.1.9 FIXES D11 W-1): writes the report to <paramref name="file"/> and ends the run, with 0 only when <paramref name="ok"/> holds and
+    /// the report was written. A report that cannot be written (its folder is not there, the file is held) is said on the error stream and the run ends with 1:
+    /// thrown from here it would stay in the task of the lambda that ran the self-test, and the launcher would stay without a report for whoever waits for it.
+    /// </summary>
+    private void EndSelfTest(string file, string report, bool ok)
+    {
+        try
+        {
+            WriteReport(Path.GetFullPath(file), report);
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"the self-test's report could not be written to {file}: {e.Message}");
+            ok = false;
+        }
+
+        Shutdown(ok ? 0 : 1);
     }
 
     /// <summary>Writes a report through a temporary file, so that a reader never sees half of it.</summary>
@@ -436,6 +493,11 @@ public partial class LauncherApp : Application
             {
                 // the next stamp tries again
             }
+        }
+
+        if (_crashed && e.ApplicationExitCode == 0)
+        {
+            e.ApplicationExitCode = 70;                 // EX_SOFTWARE: the checks may all have passed, but something nobody caught went wrong
         }
 
         _instance?.Dispose();
@@ -491,21 +553,46 @@ public partial class LauncherApp : Application
         return false;
     }
 
-    private static void Report(Exception e, LauncherPaths paths)
+    /// <summary>An exception nobody caught: into launcher_crash.log, then a box. In a verification mode no box: the error stream instead, the log only in the
+    /// profile --data named, and the run does not end with 0.</summary>
+    private void Report(Exception e)
     {
+        LauncherPaths? paths = _unattended ? _dataProfile : _paths;
         string? log = null;
-        try
+        if (paths is not null)
         {
-            Directory.CreateDirectory(paths.DataDirectory);
-            log = Path.Combine(paths.DataDirectory, "launcher_crash.log");
-            File.AppendAllText(log, $"{DateTime.Now:s}  {e}{Environment.NewLine}{Environment.NewLine}");
-        }
-        catch (Exception io) when (io is IOException or UnauthorizedAccessException)
-        {
-            log = null;
+            try
+            {
+                Directory.CreateDirectory(paths.DataDirectory);
+                log = Path.Combine(paths.DataDirectory, "launcher_crash.log");
+                File.AppendAllText(log, $"{DateTime.Now:s}  {e}{Environment.NewLine}{Environment.NewLine}");
+            }
+            catch (Exception io) when (io is IOException or UnauthorizedAccessException)
+            {
+                log = null;
+            }
         }
 
-        MessageBox.Show(e.Message + (log is null ? string.Empty : "\n\nDetails: " + log), "Tsukihime Launcher", MessageBoxButton.OK, MessageBoxImage.Warning);
+        if (_unattended)
+        {
+            _crashed = true;
+            Console.Error.WriteLine($"unhandled exception: {e}");
+            return;
+        }
+
+        Box(e.Message + (log is null ? string.Empty : "\n\nDetails: " + log), MessageBoxImage.Warning);
+    }
+
+    /// <summary>The launcher's one way to open a box. Never in a verification mode.</summary>
+    private void Box(string text, MessageBoxImage image)
+    {
+        if (_unattended)
+        {
+            Console.Error.WriteLine(text);
+            return;
+        }
+
+        MessageBox.Show(text, "Tsukihime Launcher", MessageBoxButton.OK, image);
     }
 
     private static class NativeMethods

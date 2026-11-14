@@ -32,7 +32,7 @@ public static class KeyTable
         new("M", "System menu; copy a slot in the save list"),
         new("Delete", "Delete the slot under the cursor in the save list"),
         new("Alt+Enter / F11", "Fullscreen on / off (the same as Config › System › Display Mode)"),
-        new("F12", "Screenshot: a PNG at the window's size into Pictures › Tsukihime (a short notice follows; Config › System › Screenshot Notice turns it off). Print Screen stays Windows' own"),
+        new("F12", "Screenshot: a PNG at the window's size into Pictures › Tsukihime (a short message follows; Config › System › Screenshot Notify turns it off). Print Screen stays Windows' own"),
     ];
 
     /// <summary>The bindings a keyboard user can press, as the game names them: every one of them is a row (a Synthetic test checks it).</summary>

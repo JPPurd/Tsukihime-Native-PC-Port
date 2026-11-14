@@ -152,6 +152,20 @@ public sealed class TitleScreen : UiScreen
     /// <summary>True while PRESS ANY BUTTON shows instead of the menu (a story was never started).</summary>
     public bool PressMode { get; private set; }
 
+    /// <summary>
+    /// True while the title's menu (or PRESS ANY BUTTON) is fully up and takes keys (v0.1.9): the moment the notice of the achievements a save's progress had
+    /// already earned waits for, so that it is not shown over the boot notice, the cautions or the intro movie.
+    /// </summary>
+    public bool MenuShown => Phase == TitlePhase.Idle && _menuAlpha >= 1f;
+
+    /// <summary>
+    /// True when the title answered the input of its last step (v0.1.9, D7): a key moved its cursor, an item was chosen (a click on it, or Decide), its quit question
+    /// was asked (Cancel, a right click, EXIT), or PRESS ANY BUTTON was pressed. A pointer that only moves (the cursor following it over the items included), the
+    /// wheel, a click beside the items, a press that only brings back a menu faded out for idling, and a key the title has no use for (a shell shortcut such as Ctrl
+    /// or Tab, a letter, a shoulder button, Left and Right) are no answer. <see cref="UiRoot"/> ends the line of the title's catch-up of achievements on an answer.
+    /// </summary>
+    public bool Answered { get; private set; }
+
     /// <summary>The G002 title stage after the rule step.</summary>
     public int Stage => _g2;
 
@@ -297,6 +311,7 @@ public sealed class TitleScreen : UiScreen
     /// <inheritdoc/>
     public override void Step(in UiInput input)
     {
+        Answered = false;
         _frame++;
         _clock += 1f / 60f;
         _pulse += 1f;
@@ -457,6 +472,7 @@ public sealed class TitleScreen : UiScreen
         {
             if (input.Any && _menuAlpha >= 1f)
             {
+                Answered = true;
                 _logo = 1f;
                 Ctx.Sound(UiSound.Start);
                 Ctx.Services.FadeOutBgm(1.5f);
@@ -485,6 +501,7 @@ public sealed class TitleScreen : UiScreen
             _items.Move(1);
         }
 
+        Answered |= _items.Cursor != before;                // a key moved the cursor; the pointer moving it over the items (just below) is no answer
         _items.Hover(input);
         if (_items.Cursor != before)
         {
@@ -514,6 +531,7 @@ public sealed class TitleScreen : UiScreen
     private void Choose(TitleItem item)
     {
         IGameServices s = Ctx.Services;
+        Answered = true;
         _logo = 1f;
         switch (item)
         {
@@ -579,6 +597,7 @@ public sealed class TitleScreen : UiScreen
             return;
         }
 
+        Answered = true;
         Ctx.Sound(UiSound.Open);
         _quitDialog = Root.Push(new ConfirmDialog(QuitMessage, true, yes =>
         {

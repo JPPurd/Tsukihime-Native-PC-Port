@@ -189,7 +189,7 @@ public sealed class InputMapper
         new("M", "system menu (copy data in the save list)"),
         new("Delete", "delete the slot under the cursor in the save list"),
         new("Alt+Enter / F11", "fullscreen"),
-        new("F12", "screenshot (a PNG at the window's size into Pictures\\Tsukihime; a short notice follows unless Config > System > Screenshot Notice is Off). Print Screen and its combinations are left to Windows"),
+        new("F12", "screenshot (a PNG at the window's size into Pictures\\Tsukihime; a short message follows unless Config > System > Screenshot Notify is Off). Print Screen and its combinations are left to Windows"),
         new("Gamepad", "south = decide, east = cancel, west = system menu, north = backlog, shoulders = auto / skip, left trigger (held) = rewind, right trigger (held) = fast-forward, start = quick save, d-pad / left stick = cursor"),
     ];
 

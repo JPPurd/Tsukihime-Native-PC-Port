@@ -604,7 +604,8 @@ zeros, as on the GPU, which creates each surface cleared to 0. Each quad:
 
 Ops are JSON-compatible: `clear`, `load` (test setup), `quad` (`tex`, or None for a fill; `dst`,
 `src`, `color` bytes, `word`, optional `state`, `transition` = (lo, hi, inv) and `clip` = [x, y, w,
-h]) and `capture` (record type 6). `"capture:n"` names capture surface n (0..15) as a texture.
+h]) and `capture` (record type 6). `overlays` and `frame` are the port's own (v0.1.9, no PS4 record;
+see the overlay mark below). `"capture:n"` names capture surface n (0..15) as a texture.
 Without `state`, compose takes the blend state from the word (5.1). The GPU tests pass `state` only
 where a list sets a state on purpose, so the C# builders' word decoding is checked by the comparison
 itself.
@@ -623,6 +624,18 @@ The GPU executor (`src/Tsuki.Render/Compositor/`, ARCHITECTURE 6.3) runs the eng
 - `FadsCommands` builds the commands of 7.2 and 7.4. The start is the effect-56 fill, capture 0 and,
   for the CAPTURE15 types, capture 15. Each frame is the rule mask (58) and the capture through the
   target alpha (26), or the cross-fade with alpha trunc(255 p).
+
+**The overlay mark (v0.1.9, not a PS4 record).** The PS4 draws no toast or achievement notice into
+its frame, so neither may reach a transition's outgoing picture, an F12 screenshot or a save
+thumbnail. The UI puts `DrawKind.OverlaysBegin` (no texture, no vertices) right before them, only in
+a frame that draws one. At the mark the executor copies target 0 into a spare 1920 x 1080 surface,
+not a cache texture. The next list that reads the previous frame at its head (a capture of target 0
+before any picture, clear or mark; fills do not end the head, so the effect-56 alpha fill belongs to
+it) first gets that copy put back into target 0. A new frame, a clear or a load of target 0 forgets
+the copy; lists without the mark run as before. The screenshot and the thumbnail read
+`GpuCompositor.Picture`: the copy when the last list drew overlays, else the frame.
+`compose.execute_list` models the same rule with the ops `overlays` (the mark) and `frame` (the
+next list begins).
 
 ---
 

@@ -5,6 +5,8 @@ using System.Diagnostics;
 using Tsuki.App.Services;
 using Tsuki.Engine.Contracts;
 using Tsuki.Engine.Game;
+using Tsuki.Engine.Trophies;
+using Tsuki.Media.Mixer;
 using Tsuki.Media.Movie;
 using Tsuki.Media.Sound;
 using Tsuki.Ui;
@@ -55,12 +57,314 @@ public sealed class AppRuntime
         _audio = audio;
         _movies = movies;
         services.Ui = ui;
-        services.FrameCapture = () => _heldThumbnail ?? Grab?.Invoke();
+        services.FrameCapture = () => _heldThumbnail ?? CleanFrame();
         services.SaveScreenRequested += () => _openSaveScreen = true;
         services.StoryEnded += OnStoryEnded;
+        services.TrophyEarned += ShowTrophy;
+        services.TrophiesFoundInSave += ShowTrophiesFound;
+        ui.TrophyNoticeStarted += OnTrophyNoticeStarted;
         HookHost(services.Host);
         services.HostReplaced += HookHost;
     }
+
+    // ---- the achievement notice (v0.1.9) ----------------------------------------------------------------------------------------------------------------
+    // The services earn and record; the runtime only shows. A notice is shown only while Config > System > Achievement Notify is On (off until the player turns it
+    // on, in Config or on the launcher's Achievements page: a game without the port's switches shows none), and never in a run that writes pictures on its own
+    // schedule (PictureRun). What the start found in the save's progress is held back until the title's menu is up and then shown one achievement after the other,
+    // in short notices (the title's catch-up; a key the title takes ends it). Each notice shows its achievement's icon, which the runtime has made on a worker
+    // (further down), and the chime sounds as a notice comes in when Achievement Sound is On too (at the end of this part).
+
+    private IReadOnlyList<int>? _trophiesFound;
+    private bool _noticeInFrame;
+
+    /// <summary>
+    /// True in a run that writes pictures on its own schedule (a route sweep, <c>--shot-at</c>, <c>--shot-on-choice</c>): the achievement notice is never shown, so
+    /// that those pictures stay the same from version to version whatever the run earns. The achievement is recorded and logged all the same. A script's own
+    /// <c>shot=</c> is the tester's picture and does not count.
+    /// </summary>
+    public bool PictureRun { get; set; }
+
+    private bool TrophyNoticeOn => !PictureRun && Services.Port?.TrophyNotice == true;
+
+    private bool TrophySoundOn => TrophyNoticeOn && Services.Port?.TrophySound == true;
+
+    // the log's words when nothing is shown (v0.1.9 FIXES D10 Q-1: "message" for what appears, "Notify" for the switch, as the Config row and the launchers say)
+    private string NoticeOff => PictureRun ? " (no message: this run writes pictures)" : " (no message: Notify is off)";
+
+    /// <summary>
+    /// The notice of achievement <paramref name="id"/> (0..29): shown, or only logged when the notice is off. The services' earned event comes here, and so does
+    /// the script verb <c>trophy=</c> of the verification runs (which records nothing).
+    /// </summary>
+    public void ShowTrophy(int id)
+    {
+        if (id is < 0 or >= TrophyTable.Count)
+        {
+            Logged?.Invoke($"trophy {id}: not a trophy");
+            return;
+        }
+
+        if (!TrophyNoticeOn)
+        {
+            Logged?.Invoke($"trophy {id} earned{NoticeOff}");
+            return;
+        }
+
+        UiAssets assets = Ui.Context.Assets;
+        RequestTrophyIcon(id);
+        PrepareChime();
+        Ui.ShowTrophy(TrophyTable.Grade(id), UiTrophyText.Heading(assets.Language), UiTrophyText.Name(assets, id), id);
+        Logged?.Invoke($"trophy {id} earned");
+    }
+
+    // The icon of an achievement's notice is made when the notice is asked for, never at start (30 large pictures read at every start would cost every player for
+    // nothing): one worker per achievement, started once in a run however often its notice is asked for. The services have recorded the achievement before they
+    // raise the event that comes here, and nothing here waits: the notice itself holds back until the icon is settled (UiTrophyNotice.IconWaitFrames at most). The
+    // notices of the title's catch-up are put in line all at once, but their icons are asked for one ahead: for the notice on show and the one after it (each step,
+    // RequestShownTrophyIcons), so a line of twenty never starts twenty workers at once and one a key ends costs nothing more. The worker stores what it made; the
+    // loop writes its line in the log, and settles the icon of a worker that failed
+
+    private readonly bool[] _trophyIconAsked = new bool[TrophyTable.Count];
+    private readonly List<(int Id, Task<string> Work)> _trophyIconWork = [];
+
+    /// <summary>
+    /// Makes the icon of achievement N (0..29) for its notice, <see cref="UiTrophyNotice.IconSize"/> pixels a side; null when it cannot be made. The app sets it
+    /// over the game folder (<see cref="TrophyIcons.Notice"/>); it is called on a worker thread. Without it (a rig, a run without a game folder) every icon is
+    /// settled as "there is none" the moment its notice is asked for, and the notice shows the grade's emblem.
+    /// </summary>
+    public Func<int, UiComposedPicture?>? TrophyIconMaker { get; set; }
+
+    /// <summary>How many icon workers this runtime has started: one per achievement whose notice was asked for.</summary>
+    public int TrophyIconsStarted { get; private set; }
+
+    // how a worker is started: on the thread pool. A test puts its own starter in, to see the moment a worker is asked for and to run it when it likes
+    internal Func<Func<string>, Task<string>> TrophyIconStarter { get; set; } = Task.Run;
+
+    /// <summary>
+    /// Waits until the icon workers that are running have finished, <paramref name="limit"/> at most; true when none is left running. For a run that steps faster
+    /// than the clock (<c>--fast</c>): its frames are no time, so the 45 frames a notice waits for its icon would pass before any worker could finish, and what
+    /// the run shows would depend on the machine's load.
+    /// </summary>
+    public bool WaitForTrophyIcons(TimeSpan limit)
+    {
+        if (_trophyIconWork.Count == 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            return Task.WaitAll([.. _trophyIconWork.Select(w => (Task)w.Work)], limit);
+        }
+        catch (AggregateException)
+        {
+            // a worker that failed has finished too; the next step says so in the log
+            return _trophyIconWork.TrueForAll(w => w.Work.IsCompleted);
+        }
+    }
+
+    private void RequestTrophyIcon(int id)
+    {
+        if (_trophyIconAsked[id])
+        {
+            return;
+        }
+
+        _trophyIconAsked[id] = true;
+        UiAssets assets = Ui.Context.Assets;
+        if (TrophyIconMaker is not { } make)
+        {
+            assets.SetTrophyIcon(id, null);
+            return;
+        }
+
+        TrophyIconsStarted++;
+        _trophyIconWork.Add((id, TrophyIconStarter(() =>
+        {
+            long start = Stopwatch.GetTimestamp();
+            UiComposedPicture? picture = make(id);
+            assets.SetTrophyIcon(id, picture);
+            return picture is null
+                ? $"achievement icon {id}: not in this game folder's pictures; the message shows the grade's emblem"
+                : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"achievement icon {id}: {picture.Width} px from the game's pictures in {Ms(start, Stopwatch.GetTimestamp()):F0} ms");
+        })));
+    }
+
+    // the icons of the notice on show and of the one after it (the catch-up's line asks for them here, a notice of its own was asked for already)
+    private void RequestShownTrophyIcons()
+    {
+        if (Ui.TrophyNotice is { } current && current.Id is >= 0 and < TrophyTable.Count)
+        {
+            RequestTrophyIcon(current.Id);
+        }
+
+        if (Ui.NextTrophyNotice is { } next && next.Id is >= 0 and < TrophyTable.Count)
+        {
+            RequestTrophyIcon(next.Id);
+        }
+    }
+
+    private void ReportTrophyIcons()
+    {
+        for (int i = 0; i < _trophyIconWork.Count; i++)
+        {
+            (int id, Task<string> work) = _trophyIconWork[i];
+            if (!work.IsCompleted)
+            {
+                continue;
+            }
+
+            _trophyIconWork.RemoveAt(i--);
+            if (work.IsCompletedSuccessfully)
+            {
+                Logged?.Invoke(work.Result);
+            }
+            else
+            {
+                // the worker ended before it stored anything: the notice must not wait for it
+                Ui.Context.Assets.SetTrophyIcon(id, null);
+                Logged?.Invoke($"achievement icon {id}: not made ({work.Exception?.GetBaseException().Message}); the message shows the grade's emblem");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The achievement notice on show, for the state line: its trophy, its name, the picture it shows (icon or emblem; "waiting" until its icon is settled), its alpha
+    /// and how many notices wait behind it; "-" for none.
+    /// </summary>
+    public string TrophyNoticeSummary() => Ui.TrophyNotice is { } notice
+        ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{notice.Id} \"{notice.Name}\" {PictureWord(notice.Picture)} a {notice.Alpha:F2} +{Ui.TrophyNoticesWaiting}")
+        : "-";
+
+    private static string PictureWord(UiTrophyPicture picture) => picture switch
+    {
+        UiTrophyPicture.Icon => "icon",
+        UiTrophyPicture.Emblem => "emblem",
+        _ => "waiting",
+    };
+
+    /// <summary>
+    /// The achievements the start found in the save's progress (the services' event; the script verb <c>trophies=</c>): once the title's menu is up, one short notice
+    /// for each of them in the order of their ids (the title's catch-up, v0.1.9 D7). Nothing is shown while the notice is off.
+    /// </summary>
+    public void ShowTrophiesFound(IReadOnlyList<int> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            return;
+        }
+
+        if (!TrophyNoticeOn)
+        {
+            Logged?.Invoke($"trophies from the save's progress: {ids.Count}{NoticeOff}");
+            return;
+        }
+
+        _trophiesFound = ids;
+    }
+
+    private void ShowFoundTrophiesOnTheTitle()
+    {
+        if (_trophiesFound is not { } ids || Ui.Top is not TitleScreen { MenuShown: true })
+        {
+            return;
+        }
+
+        _trophiesFound = null;
+        if (!TrophyNoticeOn)
+        {
+            Logged?.Invoke($"trophies from the save's progress: {ids.Count}{NoticeOff}");
+            return;
+        }
+
+        // one after the other in the order of their ids, each with its own icon (asked for as it comes near, RequestShownTrophyIcons) and in the short times; the
+        // chime, when it is on, sounds once for the whole line: with the first
+        int[] line = [.. ids.Where(id => id is >= 0 and < TrophyTable.Count).Distinct().Order()];
+        UiAssets assets = Ui.Context.Assets;
+        bool first = true;
+        foreach (int id in line)
+        {
+            Ui.ShowTrophy(TrophyTable.Grade(id), UiTrophyText.Heading(assets.Language), UiTrophyText.Name(assets, id), id, catchUp: true, chime: first);
+            first = false;
+        }
+
+        if (line.Length > 0)
+        {
+            PrepareChime();
+        }
+
+        RequestShownTrophyIcons();
+        Logged?.Invoke($"trophies from the save's progress: {line.Length}, one message each on the title ({string.Join(", ", line)})");
+    }
+
+    // ---- the chime (v0.1.9, D7) ---------------------------------------------------------------------------------------------------------------------------
+    // Config > System > Achievement Sound (off until the player turns it on; it sounds only while the notice is on too): the owner's short chime as a notice comes
+    // in, once for the title's whole catch-up. It plays at the player's sound-effect volume (Config > Sound, "Sound Effects") and 6 dB below it, on a voice of its
+    // own (AchievementChime), so it never takes or lowers a voice of the story or the music. It stays silent in skip and fast-forward, while the sound effects are
+    // muted (or at 0), and within 1.5 s of the last one; a muted run (--mute, a hidden window, no sound device) has no device to hear it on. The log says
+    // "achievement chime" each time it plays
+
+    private long _lastChimeFrame = long.MinValue / 2;
+
+    /// <summary>The mixer the chime plays on; set by the app (null: the chime is decided and logged, and nothing is played).</summary>
+    public AudioMixer? Mixer { get; set; }
+
+    /// <summary>True when the run has no sound device to hear anything on (<c>--mute</c>, a hidden window, no device): the chime is not played into the mixer.</summary>
+    public bool Muted { get; set; }
+
+    /// <summary>How many chimes this runtime has played (for the tests).</summary>
+    public int ChimesPlayed { get; private set; }
+
+    // the chime's samples are made once, on a worker, the first time a notice is put in line while the sound is on (a few milliseconds the loop would otherwise spend
+    // in the frame the notice comes in); a test puts its own starter in to see that it is asked for
+    internal Action<Action> ChimeStarter { get; set; } = work => Task.Run(work);
+
+    private bool _chimePrepared;
+
+    private void PrepareChime()
+    {
+        if (TrophySoundOn && !_chimePrepared)
+        {
+            _chimePrepared = true;
+            ChimeStarter(() => _ = AchievementChime.Clip);
+        }
+    }
+
+    // the UI says a notice starts its way in (UiRoot.TrophyNoticeStarted); internal for the tests of the 1.5 s rule, which no flow of notices reaches by itself
+    internal void OnTrophyNoticeStarted(UiTrophyNotice notice)
+    {
+        if (!notice.Chime || !TrophySoundOn)
+        {
+            return;
+        }
+
+        // the story's skip and fast-forward (the latch, a held key or button, the mode panel's buttons, the drag gesture)
+        string? quiet = Services.StoryActive && (Host.SkipLatch || Host.Mode.SkipActive != 0 || Services.FastForwardHeld || _gesture > 0) ? "skip or fast-forward"
+            : Services.SoundEffectGain <= 0f ? "the sound effects are muted"
+            : Frame - _lastChimeFrame < AchievementChime.MinimumGapFrames ? "less than 1.5 s after the last one"
+            : null;
+        if (quiet is not null)
+        {
+            Logged?.Invoke($"no achievement chime for achievement {notice.Id}: {quiet}");
+            return;
+        }
+
+        float gain = Services.SoundEffectGain * AchievementChime.Attenuation;
+        _lastChimeFrame = Frame;
+        ChimesPlayed++;
+        if (!Muted)
+        {
+            Mixer?.Post(MixerCommand.Play(AchievementChime.Voice, AchievementChime.Clip, false, gain, 0f));
+        }
+
+        Logged?.Invoke(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"achievement chime for achievement {notice.Id} (gain {gain:F3}{(Muted ? "; silent: this run is muted" : string.Empty)})"));
+    }
+
+    // A frame that shows the achievement notice is not a save's thumbnail: while one is in the frame the last clean page of this story stands in for it, if it is
+    // recent. Without such a page (skip, fast-forward, a story just loaded, a long while without a page) the frame is grabbed, and the renderer's grab never has
+    // the notice or the toast in it: UiRoot marks where they begin and the compositor keeps the frame as it was there (GameApp.GrabThumbnail, v0.1.9)
+    private (int Width, int Height, byte[] Rgba)? CleanFrame() =>
+        _noticeInFrame && _storyThumbnail is { } page && Frame - _storyThumbnailFrame <= BrightThumbnailAge ? page : Grab?.Invoke();
 
     // _RDAS on a scene the player has completed (GameHost.CmdRdas, with Auto Skip Cleared Scenes on): the engine only raises the offer; the port answers it the
     // way the PS4's mode panel does (knife ui.rs 6177-6184, sub_40ED0 top state 1): the next scene, asked first (dialog 10) when Show Confirmation Message is
@@ -119,7 +423,10 @@ public sealed class AppRuntime
     /// <summary>The step counter.</summary>
     public long Frame { get; private set; }
 
-    /// <summary>Reads the frame buffer as a 320 x 180 thumbnail; set by the renderer (null in tests: saves have no thumbnail).</summary>
+    /// <summary>
+    /// Reads the last drawn frame as a 320 x 180 thumbnail, without what that frame drew after its <see cref="DrawKind.OverlaysBegin"/> mark (the toast, the
+    /// achievement notice; v0.1.9); set by the renderer (null in tests: saves have no thumbnail).
+    /// </summary>
     public Func<(int Width, int Height, byte[] Rgba)?>? Grab { get; set; }
 
     /// <summary>Raised for lines the runtime wants logged.</summary>
@@ -185,6 +492,8 @@ public sealed class AppRuntime
     {
         long t0 = Stopwatch.GetTimestamp();
         Frame++;
+        ReportTrophyIcons();
+        RequestShownTrophyIcons();
         Services.Tick();
         IReadOnlyList<MovieClock> clocks = _movies?.Step(nominalTimestamp) ?? _noClocks;
         long t1 = Stopwatch.GetTimestamp();
@@ -352,8 +661,10 @@ public sealed class AppRuntime
             Ui.Push(new TitleScreen());
         }
 
+        ShowFoundTrophiesOnTheTitle();
         long t4b = Stopwatch.GetTimestamp();
         Ui.Draw(list);
+        _noticeInFrame = Ui is { HideToast: false, TrophyNotice.Alpha: > 0f };
         list.Seal();
         long t5 = Stopwatch.GetTimestamp();
         LastTimes = new StepTimes(Ms(t0, t1), Ms(t1, t2), Ms(t2, t3), Ms(t3, t4), Ms(t4, t4b), Ms(t4b, t5));
@@ -493,7 +804,7 @@ public sealed class AppRuntime
 
     private void NoteStoryFrame()
     {
-        if (Grab is null || Frame - _storyThumbnailFrame < StoryThumbnailGap || Host.ChoiceOpen || Host.MovieActive || Host.SkipLatch || Services.FastForwardHeld
+        if (Grab is null || _noticeInFrame || Frame - _storyThumbnailFrame < StoryThumbnailGap || Host.ChoiceOpen || Host.MovieActive || Host.SkipLatch || Services.FastForwardHeld
             || Host.PageMessages.Count == 0 || Host.Wait.WindowAlpha < 0.99f || Host.TextFade < 1f || Host.F(1103) != 0)
         {
             return;
@@ -525,7 +836,7 @@ public sealed class AppRuntime
 
     private void BeginOverlay()
     {
-        _heldThumbnail = Grab?.Invoke();
+        _heldThumbnail = CleanFrame();
     }
 
     private bool Rewind(in InputFrame raw)

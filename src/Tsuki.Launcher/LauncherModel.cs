@@ -18,7 +18,7 @@ namespace Tsuki.Launcher;
 /// <summary>A sidebar entry.</summary>
 /// <param name="Page">The page it shows.</param>
 /// <param name="Label">Its text.</param>
-/// <param name="Glyph">Its Segoe Fluent Icons character.</param>
+/// <param name="Glyph">Its icon: a character that Segoe Fluent Icons and Segoe MDL2 Assets both have (the theme's IconFont falls back to the second).</param>
 public sealed record NavItem(LauncherPage Page, string Label, string Glyph);
 
 /// <summary>A backup as the saves page lists it.</summary>
@@ -68,7 +68,9 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
     private readonly LauncherPaths _paths;
     private readonly string _launcherDirectory;
     private string? _gameFolderOverride;
+    private readonly ProfileWatch _profileWatch;
     private LauncherProfile _profile;
+    private bool _profileFollowing;
     private GameFolderInfo _folder = GameFolderCheck.NotSet;
     private string _folderText = string.Empty;
     private string? _appExe;
@@ -87,7 +89,7 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
     private ImageSource? _heroLogo;
     private string? _heroArtFolder;
     private string? _gameIconPath;
-    private IReadOnlyList<string> _controllers = [];
+    private readonly ControllerList _controllers;
 
     /// <summary>Creates the model; call <see cref="RefreshAsync"/> to fill it.</summary>
     /// <param name="paths">The profile folder.</param>
@@ -98,7 +100,8 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
         _paths = paths;
         _launcherDirectory = launcherDirectory;
         _gameFolderOverride = gameFolder;
-        _profile = LauncherProfile.Read(paths);
+        _profileWatch = new ProfileWatch(paths);
+        ReadProfile();
         NavItems =
         [
             new(LauncherPage.Play, "Play", ""),
@@ -107,6 +110,7 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
             new(LauncherPage.Language, "Language & sound", ""),
             new(LauncherPage.Controls, "Controls", ""),
             new(LauncherPage.Saves, "Saves", ""),
+            new(LauncherPage.Achievements, LauncherTexts.AchievementsTitle, ""),    // FavoriteStar: Segoe Fluent Icons and Segoe MDL2 Assets both have it
             new(LauncherPage.Help, "Help & about", ""),
         ];
         FixCommand = new RelayCommand(p => { if (p is LauncherPage page) { Page = page; } });
@@ -129,6 +133,12 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
         DesktopLauncherShortcutCommand = new RelayCommand(_ => AskShortcut(ShortcutKind.DesktopLauncher));
         StartMenuShortcutsCommand = new RelayCommand(_ => AskShortcut(ShortcutKind.StartMenu));
         _log = LauncherLog.For(paths);
+        _controllers = new ControllerList(Controllers.Connected, _log.Write);
+        _controllers.Changed += () => Raise(nameof(ControllersText));
+        _achievements = new AchievementsState(paths);
+        AchievementTabs = [.. AchievementsState.Filters.Select(f => new AchievementTabView(f, _achievements.TabLabel(f)))];
+        _pictures.Changed += OnAchievementIcon;
+        ShowAchievements();
     }
 
     /// <inheritdoc/>
@@ -157,6 +167,12 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
         get => _page;
         set
         {
+            if (value == LauncherPage.Achievements && _page != value)
+            {
+                // v0.1.9: the pictures of its rows are made from the first time the page is shown, not at the launcher's start
+                OpenAchievements();
+            }
+
             if (Set(ref _page, value))
             {
                 Raise(nameof(SelectedNav));
@@ -277,7 +293,7 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
     public string ContentsText => LauncherTexts.ContentsText(_folder);
 
     /// <summary>The connected controllers, in words.</summary>
-    public string ControllersText => _controllers.Count == 0 ? "No controller detected" : string.Join("\n", _controllers.Select(c => "•  " + c));
+    public string ControllersText => _controllers.Names.Count == 0 ? "No controller detected" : string.Join("\n", _controllers.Names.Select(c => "•  " + c));
 
     /// <summary>"CUSA47999 · game version 01.01" (a folder that is set but incomplete says "version unknown", not "not set"; package R1).</summary>
     public string GameChip => LauncherTexts.GameChip(_folder);
@@ -537,15 +553,18 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
     /// <summary>Reads everything again: the profile, the game folder (on a worker thread), the machine.</summary>
     public async Task RefreshAsync()
     {
-        _profile = LauncherProfile.Read(_paths);
+        ReadProfile();
         string? remembered = _gameFolderOverride ?? _paths.ReadGameDirectory() ?? Environment.GetEnvironmentVariable("TSUKI_GAME_DIR");
         string appDir = _launcherDirectory;
-        (GameFolderInfo folder, IReadOnlyList<string> graphics, IReadOnlyList<MonitorEntry> monitors, string? shad, IReadOnlyList<string> pads) = await Task.Run(() =>
+
+        // v0.1.9 (FIXES D12 P-1): the controller list is read beside the refresh, as a task of its own from here on. It never decides when the game folder is
+        // shown, and nothing it does (a device that is slow to name itself or never does, an exception) can cost more than the names on the Controls page
+        Task controllers = _controllers.ReadAsync();
+        (GameFolderInfo folder, IReadOnlyList<string> graphics, IReadOnlyList<MonitorEntry> monitors, string? shad) = await Task.Run(() =>
         {
             GameFolderInfo info = GameFolderCheck.Inspect(remembered);
-            return (info, SystemInfo.VideoAdapters(), SystemInfo.Monitors(), SaveTools.FindShadPs4Image(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)), Controllers.Connected());
+            return (info, SystemInfo.VideoAdapters(), SystemInfo.Monitors(), SaveTools.FindShadPs4Image(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)));
         });
-        _controllers = pads;
         _graphics = graphics;
         _monitors = monitors;
         _shadImage = shad;
@@ -561,8 +580,12 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
         Folder = folder;
         FolderMessage = string.Empty;
         ReloadBackups();
+        await LoadAchievementsAsync();
         await LoadHeroAsync();
         await LoadGameIconAsync();
+
+        // on a normal PC the names are there long before; a list that takes longer than the short wait is shown when it comes
+        await _controllers.WaitBrieflyAsync(controllers);
     }
 
     /// <summary>
@@ -648,9 +671,90 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
             ShowToast("settings.ini could not be written (" + _paths.SettingsFile + ").");
         }
 
-        _profile = LauncherProfile.Read(_paths);
+        // read after the launcher's own write: the poll does not read it back as a change made by the game
+        ReadProfile();
         RebuildDerived();
         Raise(null);
+    }
+
+    /// <summary>
+    /// Reads the whole profile (settings.ini, save.dat and the probe of the folder), and tells the poll's watch, which counts the changes made behind the
+    /// launcher from here. The files are looked at before they are read, so a write during the reading is seen by the next poll.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.MemberNotNull(nameof(_profile))]
+    private void ReadProfile()
+    {
+        ProfileLook look = _profileWatch.Look();
+        _profile = LauncherProfile.Read(_paths);
+        _profileWatch.Took(look);
+    }
+
+    /// <summary>How often the poll found settings.ini changed by somebody else (the game) and read it (the self-test).</summary>
+    public int SettingsReadings => _profileWatch.SettingsReadings;
+
+    /// <summary>How often the poll found save.dat changed by somebody else (the game) and read its summary (the self-test).</summary>
+    public int SaveReadings => _profileWatch.SaveReadings;
+
+    /// <summary>
+    /// The poll's look at the files the settings pages show (two file lookups): the game writes settings.ini (trophy_notice and trophy_sound from its Config; at
+    /// its start it takes the launcher's language and window mode out of it) and save.dat (where that language and window mode then live) while the launcher is
+    /// open, and the launcher would otherwise show what they said when it last read them. What changed is read on a worker thread (settings.ini alone, and
+    /// save.dat's summary; never through LauncherProfile, whose reading writes a probe file), and the pages that show it follow. A file that could not be read
+    /// just now leaves them as they are and is read at the next poll. One look at a time: a poll that finds one under way leaves it to that one.
+    /// </summary>
+    /// <returns>True when the pages show something new.</returns>
+    private async Task<bool> FollowProfileAsync()
+    {
+        if (_profileFollowing || !_profileWatch.Due(out ProfilePoll poll))
+        {
+            return false;
+        }
+
+        _profileFollowing = true;
+        try
+        {
+            LauncherPaths paths = _paths;
+            ProfileReading reading = await Task.Run(() => ProfileWatch.Take(paths, poll));
+            if (_profileWatch.Apply(reading, _profile) is not { } profile)
+            {
+                return false;
+            }
+
+            LauncherProfile before = _profile;
+            _profile = profile;
+
+            // the properties that show what changed, one by one (not Raise(null): the poll runs every two seconds, and the rest of the pages, the path box being
+            // typed in and the lists among them, stays as it is). The language and the window mode come from both files.
+            List<string> shown = [nameof(LanguageIndex), nameof(Fullscreen), nameof(StatusLine)];
+            if (profile.Settings != before.Settings)
+            {
+                shown.AddRange([
+                    nameof(TrophyNotice), nameof(TrophySound), nameof(VSync), nameof(PromptsIndex), nameof(SelectedWindowSize), nameof(WindowSizeNote), nameof(SelectedMonitor),
+                    nameof(ShowArcueidOnPrograms), nameof(CheckForUpdatesOnStart),
+                ]);
+                if (profile.Settings.Monitor != before.Settings.Monitor)
+                {
+                    shown.Add(nameof(WindowSizes));
+                }
+            }
+
+            if (profile.Saves != before.Saves)
+            {
+                RebuildDerived();
+                shown.AddRange([nameof(Saves), nameof(SaveText), nameof(ReadyRows), nameof(ReadySummary), nameof(ReadyAllGood)]);
+            }
+
+            foreach (string name in shown)
+            {
+                Raise(name);
+            }
+
+            return true;
+        }
+        finally
+        {
+            _profileFollowing = false;
+        }
     }
 
     // -- game folder --------------------------------------------------------------------------------------------------
@@ -731,8 +835,17 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
         Raise(nameof(GameRunning));
         Raise(nameof(PlayLabel));
         (PlayCommand as RelayCommand)?.Raise();
-        await RefreshAsync();
-        GameExited?.Invoke(code);
+        try
+        {
+            await RefreshAsync();
+        }
+        finally
+        {
+            // v0.1.9 FIXES D13 S-7: the window was minimised for the game and only this brings it back, so it is said whatever the refresh did (a refresh that
+            // threw left the launcher in the task bar behind its error box). What the refresh threw goes on to the dispatcher's handler as before
+            GameExited?.Invoke(code);
+        }
+
         if (LauncherTexts.GameExited(code) is { } toast)
         {
             ShowToast(toast);
@@ -765,7 +878,7 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
     {
         try
         {
-            SaveTools.Restore(_paths, backup, DateTime.Now);
+            SaveTools.Restore(_paths, backup, DateTime.Now, AchievementsFolder);
             ShowToast("Restored " + backup.Name + ". The previous save is in the backup list.");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -787,7 +900,7 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
     {
         try
         {
-            (BackupInfo? _, int slots) = SaveTools.ImportPs4(_paths, imagePath, DateTime.Now);
+            (BackupInfo? _, int slots) = SaveTools.ImportPs4(_paths, imagePath, DateTime.Now, AchievementsFolder);
             ShowToast($"Imported {slots} save slots from the PS4 image.");
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or Tsuki.Engine.Save.SaveFormatException)
@@ -800,7 +913,7 @@ public sealed partial class LauncherModel : INotifyPropertyChanged
 
     private void AfterSaveChange()
     {
-        _profile = LauncherProfile.Read(_paths);
+        ReadProfile();
         RebuildDerived();
         ReloadBackups();
         Raise(null);

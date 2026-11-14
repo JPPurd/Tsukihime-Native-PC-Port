@@ -1,5 +1,5 @@
-// The PC port's own switches (packages K21, K23 and K24): Mute in Background (Config > Sound), Screenshot Notice, Copy Text to Clipboard, Text Hooker Output and Text
-// WebSocket (Config > System). They belong to the PC program, not to the PS4 game, so they live in settings.ini next to the button prompts and the window size (AppSettings), never in
+// The PC port's own switches (packages K21, K23 and K24; v0.1.9): Mute in Background (Config > Sound), Screenshot Notify, Achievement Notify, Achievement Sound,
+// Copy Text to Clipboard, Text Hooker Output and Text WebSocket (Config > System). They belong to the PC program, not to the PS4 game, so they live in settings.ini next to the button prompts and the window size (AppSettings), never in
 // the config block of save.dat. The config screen reads and sets them through IUiPortSettings; the app acts on them (the mixer's master gain, the text outputs)
 // through Changed.
 using Tsuki.Ui;
@@ -16,6 +16,8 @@ public sealed class PortSettings : IUiPortSettings
     private bool _hooker;
     private bool _socket;
     private bool _notice;
+    private bool _trophyNotice;
+    private bool _trophySound;
 
     /// <summary>Creates the switches from the file's values (<paramref name="data"/>, read at start).</summary>
     /// <param name="settingsPath">settings.ini, or null when nothing is written (<c>--no-save</c>).</param>
@@ -30,6 +32,9 @@ public sealed class PortSettings : IUiPortSettings
         _hooker = data.TextHooker ?? true;
         _socket = data.TextWebSocket ?? false;
         _notice = data.ScreenshotNotice ?? true;
+        // the achievement notice and its chime are off until the player turns them on (v0.1.9: the owner's choice), in the launcher or in Config
+        _trophyNotice = data.TrophyNoticeOn;
+        _trophySound = data.TrophySoundOn;
         TextWebSocketPort = data.TextWebSocketPort ?? AppSettingsData.DefaultTextWebSocketPort;
         TextWebSocketOrigin = data.TextWebSocketOrigin ?? AppSettingsData.DefaultTextWebSocketOrigin;
     }
@@ -114,6 +119,38 @@ public sealed class PortSettings : IUiPortSettings
 
             _notice = value;
             Save(s => s with { ScreenshotNotice = value }, "screenshot_notice", value);
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool TrophyNotice
+    {
+        get => _trophyNotice;
+        set
+        {
+            if (_trophyNotice == value)
+            {
+                return;
+            }
+
+            _trophyNotice = value;
+            Save(s => s with { TrophyNotice = value }, "trophy_notice", value);
+        }
+    }
+
+    /// <inheritdoc/>
+    public bool TrophySound
+    {
+        get => _trophySound;
+        set
+        {
+            if (_trophySound == value)
+            {
+                return;
+            }
+
+            _trophySound = value;
+            Save(s => s with { TrophySound = value }, "trophy_sound", value);
         }
     }
 

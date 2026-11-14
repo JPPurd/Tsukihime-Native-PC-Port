@@ -43,7 +43,7 @@ Local player-document links must resolve inside every archive, so each carries t
 unbundled references use full repository URLs. Do not move essential offline instructions to such a link.
 Check both copies of the setup guide when changing player instructions.
 
-Current source versions are **0.1.8** for the player and both launchers. Recent self-contained evaluation resolved
+Current source versions are **0.1.9** for the player and both launchers. Recent self-contained evaluation resolved
 **.NET 10.0.13** and **SDL 3.5.0**; check the actual resolved versions for each release.
 Check [Releases](https://github.com/Take00C/Tsukihime-Native-PC-Port/releases) for published downloads.
 Source builds and fork releases may differ from the published packages.
@@ -106,7 +106,10 @@ Before building a distributable candidate:
    research tools into the system interpreter.
 5. Build warning-free and run the Synthetic, Data, Render, Avalonia and Python test programs. Data/GPU checks
    need their documented inputs; record missing-input and platform skips separately from passes.
-   Use `TSUKI_GAME_DIR=/nonexistent` for checks intended to exclude retail data.
+   Use `TSUKI_GAME_DIR=/nonexistent` for checks intended to exclude retail data. With a game folder, the Render
+   class `UploadTimingTests` shows a window on the desktop and judges frame times only on a display clearly faster
+   than 60 Hz: run it apart with nobody at the screen, or leave it out with
+   `--filter "FullyQualifiedName!~UploadTimingTests"` and record it as not run.
 6. Finish the intended source commit before the final publish. Record that commit outside the source
    tree with the candidate results. If source changes afterwards, rebuild and repeat affected checks.
 

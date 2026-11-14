@@ -594,7 +594,7 @@ oracle on the full corpus.
 |---|---|---|---|
 | flow, scenes, script end | JUMP (1,741), GOTO, IF__ (1,194), GOTS, IFNX (PS4 branch taken), IFP4 (no-op), IFSC, IFUR, END_, RTM_, RTMN, RTM2, PGST (17,202), XSTP/XRSM; markers ZZ, ZY | script 3.7, 4.1, 7; vm_variables 4 | `vm_vars`, `script` |
 | variables | WKST (487,857), WKAD (45,679), WKOR | vm_variables 3-5 | `vm_vars` |
-| bookkeeping, unlocks | RDST, RTST, RDAS, RDED, STCG, ATSV (398), WTSV, TRPY (logged only) | adv_state 2.5, 7.2; gallery 2 | `misc_adv_system_state`, `misc_gallery_extras_flowchart` |
+| bookkeeping, unlocks | RDST, RTST, RDAS, RDED, STCG, ATSV (398), WTSV, TRPY (achievements, `TrophyRules`) | adv_state 2.5, 7.2; gallery 2, 8; script 4.1 | `misc_adv_system_state`, `misc_gallery_extras_flowchart` |
 | messages | ZM (42,590), ZD, MSAD, WNTY, CLO2..CLO5, MSQK, FCSP, FCLN | text 4-6; textbox 2-8 | `textbox` |
 | choices | SELR (824), SELD (170), SELA, SELS | vm_variables 4.5-4.6; system_flow 5 | `misc_boot_title_choice_flow`, `vm_vars` |
 | pictures, layers | STCH (54,494), SCH2, STCC (63,261), STCP, STZ4, STRT, STRR, STRA, STPV, SOXY, STGS, STBR (14,940), STEC (12,900), STCF, STMA (24,333), SGMA, SPMA, SNX2, SNX3, STNS, STTR, SACL, SBAS, STCL, SPFC, SPRD, SPRC | layers 3-9; images 7-8 | `misc_layer_state_and_motions` |
@@ -623,6 +623,9 @@ only) and checked by a test:
 The PS4 draws through display lists of fixed-size records (compositing 6). `Tsuki.Engine`
 produces the same kind of list, in PS4 order: scene layers sorted by z, then the message
 window and HUD, the choice screen and the UI. `Tsuki.Render` only executes it.
+The port's toast and achievement notice come last, after a mark of its own (`DrawKind.OverlaysBegin`,
+not a PS4 record): the executor keeps the frame as it was at the mark, and a transition start, the
+F12 screenshot and the save thumbnail take that copy (compositing 6.1).
 
 This split is the main testing lever:
 
@@ -1231,7 +1234,7 @@ finished so that no running agent is blocked mid-task (decision 8; `PACE.md` 7.1
 | 5 | engine-only menu transitions 18, 20..24, 68..70 | cross-fade stand-in, then decode (M7) |
 | 6 | about 1 LSB numeric differences (GLSL float vs PS4 fp16 export, filtering) | the oracle models the fp16 round-toward-zero export (6.3); tolerances in T5; the PS4's blender rounding on RGBA8 targets is unknown until PS4 captures (S3.md 6 #2) |
 | 7 | save previews are screenshots, not the allpac2 composite | switchable later (P2) |
-| 8 | no trophies (log only), PS4 dialogs, light bar or Share; keyboard and mouse bindings are our design | none needed |
+| 8 | trophies are the port's achievements (profile file `trophies.ini`, its own notice and launcher page, without the PS4's skippable 600-frame wait after a new chapter trophy); no PS4 dialogs, light bar or Share; keyboard and mouse bindings are our design | none needed |
 | 9 | only the analysed eboot build is supported | clear refusal; pattern-based locator P3 |
 | 10 | Korean data are stubs (as on the PS4); LV lip sync is a placeholder in retail | none |
 | 11 | movies decoded in software by FFmpeg instead of the PS4 hardware decoder | expected to be invisible; T6 frame checks. S2: the planes are byte-identical to the Gyan CLI's, and the colour is within 1-2 levels of swscale and of `compose` |

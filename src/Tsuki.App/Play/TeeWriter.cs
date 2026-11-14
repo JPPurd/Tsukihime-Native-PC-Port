@@ -1,5 +1,6 @@
-// The run log of a Linux or macOS start: without --log it goes to the console and to last_run.log in the profile (GameApp.DefaultLogFile), with --log to that file
-// (GameApp.LogFileWriter). The file is best effort: a full disk or a quota (ENOSPC, EDQUOT) must not end the game, so a write that fails drops the file.
+// The run log: with --log it goes to that file (GameApp.LogFileWriter; on Windows too since v0.1.9), and a Linux or macOS start without --log sends it to the
+// console and to last_run.log in the profile (GameApp.DefaultLogFile). The file is best effort: a full disk or a quota (ENOSPC, EDQUOT, ERROR_DISK_FULL) must not
+// end the game, so a write that fails drops the file.
 using System.Text;
 
 namespace Tsuki.App.Play;

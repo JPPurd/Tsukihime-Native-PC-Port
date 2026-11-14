@@ -185,7 +185,11 @@ public static partial class ReleaseRules
 
     private static readonly string[] GameDataExtensions = [".mrg", ".hed", ".nam", ".mzp", ".mzx", ".at9", ".vag", ".mp4", ".sfo", ".pkg", ".self", ".fself", ".prx", ".sprx", ".trp"];
 
-    private static readonly string[] GameDataNames = ["eboot.bin", "save.dat", "save.dat.bak", "savedata000"];
+    // v0.1.9: sounds in the common formats. The game's sounds come from the player's game folder and the port makes its one sound of its own, the achievement
+    // chime, at run time: a release carries no audio file (tools/setup/hooks/precommit_check.py keeps them out of the repository the same way)
+    private static readonly string[] AudioExtensions = [".wav", ".ogg", ".mp3", ".flac", ".opus", ".m4a", ".aac", ".wma", ".aif", ".aiff"];
+
+    private static readonly string[] GameDataNames = ["eboot.bin", "save.dat", "save.dat.bak", "savedata000", "trophies.ini"];
 
     /// <summary>
     /// Why <paramref name="relativePath"/> (a path inside the folder or archive, '/' or '\' separated) must not be released, or null. Pictures other than
@@ -218,7 +222,16 @@ public static partial class ReleaseRules
             return $"{path} is a picture; a release carries none but the README's logo ({Logo})";
         }
 
-        if (GameDataExtensions.Contains(ext) || GameDataNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+        if (AudioExtensions.Contains(ext))
+        {
+            return $"{path} is an audio file; a release carries none (the game's sounds come from the player's game folder, and the port makes its own at run time)";
+        }
+
+        // (a writer's temporary copy, which a program stopped in the middle of a write leaves beside the file, holds the same: trophies.ini.0a1b2c3d.tmp,
+        // save.dat.restore.tmp; and so does the copy a damaged file is set aside as: save.dat.broken-20261112-063348, trophies.ini.broken-20261112T063348Z)
+        if (GameDataExtensions.Contains(ext) || GameDataNames.Contains(name, StringComparer.OrdinalIgnoreCase)
+            || (ext == ".tmp" && GameDataNames.Any(n => name.StartsWith(n + ".", StringComparison.OrdinalIgnoreCase)))
+            || GameDataNames.Any(n => name.StartsWith(n + ".broken-", StringComparison.OrdinalIgnoreCase)))
         {
             return $"{path} is game data or a save; a release carries none";
         }

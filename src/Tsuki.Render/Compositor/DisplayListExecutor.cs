@@ -41,11 +41,15 @@ public sealed class DisplayListExecutor(GpuCompositor compositor, ITextureSource
     /// <summary>
     /// Runs every command of <paramref name="list"/> in order. The targets are not cleared first: the frame
     /// still holds the previous frame, which a transition start captures (compositing 14 open question 2).
+    /// The port's overlays are no part of that frame (v0.1.9): where a list's overlays begin (<see cref="DrawKind.OverlaysBegin"/>) the frame is copied
+    /// aside, and when the next list reads the previous frame at its head (<see cref="ReadsPreviousFrame"/>) that copy is put back first, so that its alpha
+    /// fill and captures see the frame they would have seen had the toast or the notice never been drawn. A list after one without overlays runs as it
+    /// always did.
     /// </summary>
     public ExecuteStats Execute(DisplayList list)
     {
         ArgumentNullException.ThrowIfNull(list);
-        Compositor.BeginFrame();
+        Compositor.BeginFrame(restoreCleanFrame: Compositor.CleanFrame is not null && ReadsPreviousFrame(list.Commands));
         int missing = 0;
         foreach (ref readonly DrawCmd cmd in list.Commands)
         {
@@ -73,6 +77,9 @@ public sealed class DisplayListExecutor(GpuCompositor compositor, ITextureSource
                     break;
                 }
 
+                case DrawKind.OverlaysBegin:
+                    Compositor.KeepCleanFrame();
+                    break;
                 default:
                     throw new InvalidOperationException($"unknown display-list command kind {cmd.Kind}");
             }
@@ -80,6 +87,34 @@ public sealed class DisplayListExecutor(GpuCompositor compositor, ITextureSource
 
         CompositorCounters c = Compositor.Counters;
         return new ExecuteStats(list.Count, c.Draws, c.Culled, c.Captures, missing, c.Blits, c.BlitPixels);
+    }
+
+    /// <summary>
+    /// True when <paramref name="commands"/> copy target 0 into a capture surface before they draw a picture into it or clear it: the list reads the frame the
+    /// previous list left (the transition start of the stage: the alpha fill of effect 56, then the captures into surfaces 0 and 15). Fills before the capture
+    /// do not end the head (that alpha fill is one); commands on the other targets are not looked at.
+    /// </summary>
+    public static bool ReadsPreviousFrame(ReadOnlySpan<DrawCmd> commands)
+    {
+        foreach (ref readonly DrawCmd c in commands)
+        {
+            if (c.Target != 0)
+            {
+                continue;
+            }
+
+            switch (c.Kind)
+            {
+                case DrawKind.Capture:
+                    return true;
+                case DrawKind.FillQuad:
+                    continue;
+                default:
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private bool Resolve(in TextureRef key, out uint texture, out TransitionParams? transition)

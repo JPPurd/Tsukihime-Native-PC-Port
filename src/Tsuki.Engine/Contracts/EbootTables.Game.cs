@@ -71,4 +71,10 @@ public interface IGameFlowTables
 
     /// <summary>(last column, F word) pairs: a jump to a column at or before the last column zeroes the word.</summary>
     IReadOnlyList<(int LastColumn, int Word)> JumpClears { get; }
+
+    /// <summary>
+    /// The flowchart scenes whose completion earns the chapter trophies (text 0x221400, 27 records; gallery.md 8): index i is the scene of trophy i + 1
+    /// (<see cref="Tsuki.Engine.Trophies.TrophyRules"/>).
+    /// </summary>
+    IReadOnlyList<int> TrophyScenes { get; }
 }

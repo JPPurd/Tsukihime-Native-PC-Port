@@ -608,6 +608,31 @@
     </Setter>
   </Style>
 
+  <!--
+    the same row, tighter: 8 px above and below the words instead of 12 and no least height. For a card that must fit a small window: the Achievements page's
+    notice card, whose two switch rows are in view under the summary in the smallest window (960 x 600; D8 P-2)
+  -->
+  <Style x:Key="CompactSettingRow" TargetType="HeaderedContentControl" BasedOn="{StaticResource SettingRow}">
+    <Setter Property="Template">
+      <Setter.Value>
+        <ControlTemplate TargetType="HeaderedContentControl">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel VerticalAlignment="Center" Margin="0,8,24,8">
+              <TextBlock Text="{TemplateBinding Header}" Style="{StaticResource RowTitle}"/>
+              <TextBlock Text="{TemplateBinding Tag}" Style="{StaticResource Muted}" Margin="0,2,0,0"/>
+            </StackPanel>
+            <ContentPresenter Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+            <Rectangle Grid.ColumnSpan="2" Height="1" Fill="{StaticResource DividerBrush}" VerticalAlignment="Bottom"/>
+          </Grid>
+        </ControlTemplate>
+      </Setter.Value>
+    </Setter>
+  </Style>
+
   <!-- the scroll host inside a text box: just the content, no bars, no corner box -->
   <Style x:Key="HostScroll" TargetType="ScrollViewer">
     <Setter Property="Template">

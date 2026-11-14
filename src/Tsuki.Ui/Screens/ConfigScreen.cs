@@ -49,7 +49,7 @@ public enum CtlKind
     /// <summary>One preset of the Window Size row under it (index into <see cref="IUiDisplaySettings.SizeChoices"/>).</summary>
     WindowSize,
 
-    /// <summary>One option of the Screenshot Notice row of the System tab (package K24, a port addition: index 0 off, 1 on); shown when the game has port settings.</summary>
+    /// <summary>One option of the Screenshot Notify row of the System tab (package K24, a port addition: index 0 off, 1 on); shown when the game has port settings.</summary>
     ScreenshotNotice,
 
     /// <summary>One option of the Copy Text to Clipboard row of the System tab (package K21, a port addition: index 0 off, 1 on); shown when the game has port settings.</summary>
@@ -66,9 +66,15 @@ public enum CtlKind
 
     /// <summary>One option of the Mute in Background row of the Sound tab (package K21: index 0 off, 1 on); shown when the game has port settings.</summary>
     BackgroundMute,
+
+    /// <summary>One option of the Achievement Notify row of the System tab (v0.1.9, a port addition: index 0 off, 1 on), under the Screenshot Notify row; shown when the game has port settings.</summary>
+    TrophyNotice,
+
+    /// <summary>One option of the Achievement Sound row (v0.1.9: index 0 off, 1 on), right under the Achievement Notify row: the chime as a notice comes in.</summary>
+    TrophySound,
 }
 
-/// <summary>The port's rows at the bottom of the System tab (packages K19, K21, K23 and K24), in the order they are laid out.</summary>
+/// <summary>The port's rows at the bottom of the System tab (packages K19, K21, K23 and K24; v0.1.9), in the order they are laid out.</summary>
 public enum PortRow
 {
     /// <summary>Display Mode (K19; a game with a window).</summary>
@@ -77,8 +83,14 @@ public enum PortRow
     /// <summary>Window Size (K19; a game with a window and a monitor that takes a preset).</summary>
     WindowSize,
 
-    /// <summary>Screenshot Notice (K24; a game with port settings): with the window rows, as it is about the picture of the window.</summary>
+    /// <summary>Screenshot Notify (K24; a game with port settings): with the window rows, as it is about the picture of the window.</summary>
     ScreenshotNotice,
+
+    /// <summary>Achievement Notify (v0.1.9; a game with port settings): the port's other notice, right under the first.</summary>
+    TrophyNotice,
+
+    /// <summary>Achievement Sound (v0.1.9; a game with port settings): the notice's chime, right under the notice's row (it sounds only while the notice is on).</summary>
+    TrophySound,
 
     /// <summary>Copy Text to Clipboard (K21; a game with port settings).</summary>
     CopyText,
@@ -126,7 +138,7 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
     private const float DisplayRowPitch = 56f;                   // each further row is one pitch lower
     private const float BandBottom = 8f;                         // below the last row (the band of K19 was 160 px for its two rows: 40 + 2 x 56 + 8)
     private const float DisplayLabelX = 431f;                    // where the sheet's own labels start ("Language" at sheet x 45)
-    private const float DimmedSizeRow = 0.5f;                    // the size row while the game is fullscreen (its choice still applies: it switches to a window)
+    private const float DimmedRow = 0.5f;                        // the size row while the game is fullscreen (its choice still applies: it switches to a window), the sound row while the notice is off
 
     // The Mute in Background row (package K21) sits in the Sound Settings box of the Sound page (sheet 1432 x 328): the box is cut below its last slider (sheet row 300,
     // y 464; the System Effects value box ends at row 268), a flat slice of it (rows 272..300) is stretched into SoundBand pixels, and the box's bottom edge, the
@@ -284,7 +296,7 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
                         }
 
                         break;
-                    case PortRow.ScreenshotNotice or PortRow.CopyText or PortRow.TextHooker or PortRow.TextWebSocket:
+                    case PortRow.ScreenshotNotice or PortRow.TrophyNotice or PortRow.TrophySound or PortRow.CopyText or PortRow.TextHooker or PortRow.TextWebSocket:
                         for (int i = 0; i < 2; i++)
                         {
                             v.Add((new Ctl(SwitchKind(band[row]), i), x, y));
@@ -386,11 +398,11 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
 
     /// <summary>
     /// The rows of the band at the bottom of the System tab, top to bottom: the display rows of a game with a window, then for a game with port settings the Screenshot
-    /// Notice row (K24) and the three text-output rows (K21, K23), and the opacity slider always.
+    /// Notify row (K24), the Achievement Notify and Achievement Sound rows (v0.1.9) and the three text-output rows (K21, K23), and the opacity slider always.
     /// </summary>
     public IReadOnlyList<PortRow> SystemBandRows()
     {
-        var rows = new List<PortRow>(7);
+        var rows = new List<PortRow>(9);
         if (Display is { } display)
         {
             rows.Add(PortRow.DisplayMode);
@@ -403,6 +415,8 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
         if (Port is not null)
         {
             rows.Add(PortRow.ScreenshotNotice);
+            rows.Add(PortRow.TrophyNotice);
+            rows.Add(PortRow.TrophySound);
             rows.Add(PortRow.CopyText);
             rows.Add(PortRow.TextHooker);
             rows.Add(PortRow.TextWebSocket);
@@ -416,6 +430,8 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
     public static CtlKind SwitchKind(PortRow row) => row switch
     {
         PortRow.ScreenshotNotice => CtlKind.ScreenshotNotice,
+        PortRow.TrophyNotice => CtlKind.TrophyNotice,
+        PortRow.TrophySound => CtlKind.TrophySound,
         PortRow.CopyText => CtlKind.CopyText,
         PortRow.TextHooker => CtlKind.TextHooker,
         PortRow.TextWebSocket => CtlKind.TextWebSocket,
@@ -423,7 +439,7 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
     };
 
     /// <summary>True for the kinds drawn as a pair of Off / On pills in the pill palette (the port's switches of packages K21, K23 and K24).</summary>
-    public static bool IsSwitch(CtlKind kind) => kind is CtlKind.ScreenshotNotice or CtlKind.CopyText or CtlKind.TextHooker or CtlKind.TextWebSocket or CtlKind.BackgroundMute;
+    public static bool IsSwitch(CtlKind kind) => kind is CtlKind.ScreenshotNotice or CtlKind.TrophyNotice or CtlKind.TrophySound or CtlKind.CopyText or CtlKind.TextHooker or CtlKind.TextWebSocket or CtlKind.BackgroundMute;
 
     /// <summary>The height of the band that holds <paramref name="rows"/> rows (160 for the two rows of K19).</summary>
     public static float BandFor(int rows) => DisplayRowDy - DisplayRowPitch + (DisplayRowPitch * rows) + BandBottom;
@@ -483,7 +499,7 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
                 return new RectF(x, y, UiPrompts.DisplayPillWidth(c.Index), UiPrompts.PillHeight);
             case CtlKind.WindowSize:
                 return new RectF(x, y, UiPrompts.SizePillWidth, UiPrompts.PillHeight);
-            case CtlKind.ScreenshotNotice or CtlKind.CopyText or CtlKind.TextHooker or CtlKind.TextWebSocket or CtlKind.BackgroundMute:
+            case CtlKind.ScreenshotNotice or CtlKind.TrophyNotice or CtlKind.TrophySound or CtlKind.CopyText or CtlKind.TextHooker or CtlKind.TextWebSocket or CtlKind.BackgroundMute:
                 return new RectF(x, y, UiPrompts.SwitchPillWidth, UiPrompts.PillHeight);
             case CtlKind.Opacity:
                 // the whole track answers the pointer, knob included at either end
@@ -647,6 +663,10 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
                 return Display is { } ds && c.Index < ds.SizeChoices.Count && ds.SizeChoices[c.Index] == ds.WindowSize;
             case CtlKind.ScreenshotNotice:
                 return Port is { } pn && pn.ScreenshotNotice == (c.Index == 1);
+            case CtlKind.TrophyNotice:
+                return Port is { } pt && pt.TrophyNotice == (c.Index == 1);
+            case CtlKind.TrophySound:
+                return Port is { } ps && ps.TrophySound == (c.Index == 1);
             case CtlKind.CopyText:
                 return Port is { } pc && pc.CopyTextToClipboard == (c.Index == 1);
             case CtlKind.TextHooker:
@@ -822,6 +842,23 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
                 {
                     Ctx.Sound(UiSound.Decide);
                     notice.ScreenshotNotice = c.Index == 1;
+                }
+
+                break;
+            case CtlKind.TrophyNotice:
+                if (Port is { } trophies)
+                {
+                    Ctx.Sound(UiSound.Decide);
+                    trophies.TrophyNotice = c.Index == 1;
+                }
+
+                break;
+            case CtlKind.TrophySound:
+                // the chime can be set while the notice is off (its row is dimmed then): it sounds once the notice is on as well
+                if (Port is { } chime)
+                {
+                    Ctx.Sound(UiSound.Decide);
+                    chime.TrophySound = c.Index == 1;
                 }
 
                 break;
@@ -1071,7 +1108,7 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
                     case PortRow.WindowSize:
                         rows.Add(Row([.. Enumerable.Range(0, Display!.SizeChoices.Count).Select(i => new Ctl(CtlKind.WindowSize, i))]));
                         break;
-                    case PortRow.ScreenshotNotice or PortRow.CopyText or PortRow.TextHooker or PortRow.TextWebSocket:
+                    case PortRow.ScreenshotNotice or PortRow.TrophyNotice or PortRow.TrophySound or PortRow.CopyText or PortRow.TextHooker or PortRow.TextWebSocket:
                         rows.Add(Row(new Ctl(SwitchKind(band), 0), new Ctl(SwitchKind(band), 1)));
                         break;
                     default:
@@ -1687,8 +1724,11 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
     private (float X, float Y) U(float x, float y) => (x * 3f, (y * UiMetrics.UnitY) - _scroll);
 
     // a heading of the band at the sheet's label x, centred on the row; a two-line one (^) a little smaller
-    private static void DrawHeading(UiPainter p, string text, float centre) =>
-        UiPrompts.DrawText(p, text, DisplayLabelX, centre, 1f, text.Contains('^', StringComparison.Ordinal) ? TwoLineHeadingScale : 0.4);
+    private static void DrawHeading(UiPainter p, string text, float centre, float alpha = 1f) =>
+        UiPrompts.DrawText(p, text, DisplayLabelX, centre, alpha, text.Contains('^', StringComparison.Ordinal) ? TwoLineHeadingScale : 0.4);
+
+    /// <summary>True while the Achievement Sound row is drawn dimmed: the notice is off, so the chime would not sound (its switch still works).</summary>
+    public bool SoundRowDimmed => Port is { TrophyNotice: false };
 
     private void DrawPage(UiPainter p)
     {
@@ -1715,10 +1755,16 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
                             UiPrompts.DrawText(p, UiPrompts.DisplayHeading(Ctx.Language), DisplayLabelX, centre, 1f);
                             break;
                         case PortRow.WindowSize:
-                            UiPrompts.DrawText(p, UiPrompts.SizeHeading(Ctx.Language), DisplayLabelX, centre, Display is { Fullscreen: true } ? DimmedSizeRow : 1f);
+                            UiPrompts.DrawText(p, UiPrompts.SizeHeading(Ctx.Language), DisplayLabelX, centre, Display is { Fullscreen: true } ? DimmedRow : 1f);
                             break;
                         case PortRow.ScreenshotNotice:
                             DrawHeading(p, UiPrompts.ScreenshotNoticeHeading(Ctx.Language), centre);
+                            break;
+                        case PortRow.TrophyNotice:
+                            DrawHeading(p, UiPrompts.TrophyNoticeHeading(Ctx.Language), centre);
+                            break;
+                        case PortRow.TrophySound:
+                            DrawHeading(p, UiPrompts.TrophySoundHeading(Ctx.Language), centre, SoundRowDimmed ? DimmedRow : 1f);
                             break;
                         case PortRow.CopyText:
                             DrawHeading(p, UiPrompts.CopyTextHeading(Ctx.Language), centre);
@@ -1958,7 +2004,7 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
             if (Display is { } display && c.Index < display.SizeChoices.Count)
             {
                 (int w, int h) = display.SizeChoices[c.Index];
-                UiPrompts.DrawPill(p, UiPrompts.SizeLabel(w, h), HitRect(c, x, y), IsOn(c), hover, display.Fullscreen && !hover ? DimmedSizeRow : 1f);
+                UiPrompts.DrawPill(p, UiPrompts.SizeLabel(w, h), HitRect(c, x, y), IsOn(c), hover, display.Fullscreen && !hover ? DimmedRow : 1f);
             }
 
             return;
@@ -1966,7 +2012,8 @@ public sealed class ConfigScreen : UiScreen, ISubMenu
 
         if (IsSwitch(c.Kind))
         {
-            UiPrompts.DrawPill(p, UiPrompts.SwitchLabel(Ctx.Language, c.Index), HitRect(c, x, y), IsOn(c), hover, 1f, translated: Ctx.Language != Language.En);
+            float alpha = c.Kind == CtlKind.TrophySound && SoundRowDimmed && !hover ? DimmedRow : 1f;
+            UiPrompts.DrawPill(p, UiPrompts.SwitchLabel(Ctx.Language, c.Index), HitRect(c, x, y), IsOn(c), hover, alpha, translated: Ctx.Language != Language.En);
             return;
         }
 
