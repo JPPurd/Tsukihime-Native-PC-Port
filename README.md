@@ -83,15 +83,6 @@ The port was developed against **CUSA47999, update 1.01**. Other builds are chec
 
 Report problems through Issues with reproduction steps and the relevant log. Include the build information and your operating system, graphics card and driver. See [CONTRIBUTING.md](CONTRIBUTING.md) for details. Do not attach game files, saves, story text or screenshots of the game.
 
-## Documentation
-
-- [Setup guide](docs/SETUP_GUIDE.md): game folders, controls, saves, settings, dictionary tools and troubleshooting.
-- [Linux guide](docs/LINUX.md): dependencies, building, running and platform-specific checks.
-- [macOS guide](docs/MACOS.md): installation, Gatekeeper, profiles and native app builds.
-- [Contributing](CONTRIBUTING.md): building from source, Python tools, tests and reporting problems.
-- [Architecture](https://github.com/Take00C/Tsukihime-Native-PC-Port/blob/main/docs/ARCHITECTURE.md) and [format reference](https://github.com/Take00C/Tsukihime-Native-PC-Port/blob/main/docs/FORMATS.md): runtime components and engine research.
-- [Publishing](https://github.com/Take00C/Tsukihime-Native-PC-Port/blob/main/docs/PUBLISHING.md): release preparation and personal icon builds.
-
 ## Credits and licence
 
 Linux support and the shorter guides are by **CateDesu**. Menu code and effects include translations from [knife](https://github.com/AuroraWright/knife) by AuroraWright. The program uses FFmpeg, SDL3, .NET, Silk.NET, SDL3-CS, FFmpeg.AutoGen and, in the Unix launcher, Avalonia. Their credits, licences and translated-file notices are in [THIRD_PARTY.md](docs/THIRD_PARTY.md).
